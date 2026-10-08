@@ -68,7 +68,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       throw new RouteError("Provide a non-empty prompt of at most 8,000 characters.", 400);
     }
-    const { prompt } = parsed.data;
+    const { prompt, waitForResults } = parsed.data;
     const website = extractWebsite(prompt);
     if (!website) {
       throw new RouteError("Include exactly one public HTTP(S) product website URL without embedded credentials.", 400);
@@ -138,7 +138,7 @@ export async function POST(request: Request) {
       effort: "auto",
       budget: { maxCostDollars: budgetDollars },
       dataSources: [{ provider: "fiber" }],
-      metadata: { requestId },
+      metadata: { requestId, app: "outmax" },
       outputSchema: agentOutputSchema,
       query: [
         `Find ${TARGET_COUNT} distinct companies that could buy the product at ${website}.`,
@@ -164,6 +164,15 @@ export async function POST(request: Request) {
     });
     await store.saveRun(run);
     log("completed", { ttlSeconds: store.ttlSeconds });
+
+    if (!waitForResults && (run.status === "queued" || run.status === "running")) {
+      return respond({
+        icp, leads: [], returnedCount: 0, runId: run.id, status: run.status,
+        stopReason: run.stopReason ?? null,
+        shortfallReason: "Research is in progress. Open this run to follow its status and retrieve results.",
+        ...accounting(),
+      }, 202);
+    }
 
     step = "exa_polling";
     const deadline = Date.now() + timeoutMs;

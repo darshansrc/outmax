@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import Exa, { ExaError } from "exa-js";
 import { z } from "zod";
 import {
-  isActive, leadResult, RouteError, runAccounting, RunStore,
+  isActive, isOutmaxRun, leadResult, RouteError, runAccounting, RunStore,
   runSummary, WaitTimeout, within,
 } from "./lead-runs";
 
@@ -44,13 +44,16 @@ export async function readLeadRuns(runId?: string) {
     if (runId === undefined) {
       step = "exa_run_listing";
       log("started");
-      // The SDK follows every cursor, so this includes runs created before Redis was added.
+      // Fetch every page, then keep only research belonging to this app.
       const runs = await within(exa.agent.runs.getAll({ limit: 100 }), 30_000);
       log("completed", { runCount: runs.length });
       step = "redis_read";
       const contexts = await store.getContexts(runs.map((run) => run.id));
       log("completed", { runCount: runs.length });
-      const summaries = runs.map((run, index) => runSummary(run, contexts[index] ?? null));
+      const summaries = runs.flatMap((run, index) => {
+        const context = contexts[index] ?? null;
+        return isOutmaxRun(run, context) ? [runSummary(run, context)] : [];
+      });
       return respond({ runs: summaries, runCount: summaries.length });
     }
 
@@ -75,6 +78,7 @@ export async function readLeadRuns(runId?: string) {
     const base = {
       runId: run.id, status: run.status, stopReason: run.stopReason ?? null,
       createdAt: run.createdAt ?? null, completedAt: run.completedAt ?? null,
+      prompt: context?.prompt ?? null, website: context?.website ?? null,
       icp: context?.icp ?? null, source, ...runAccounting(run, context),
     };
     if (isActive(run)) {

@@ -141,6 +141,7 @@ test("creates one Fiber run with budget, validates, deduplicates, and separates 
   expect(options.effort).toBe("auto");
   expect(options.budget).toEqual({ maxCostDollars: 5 });
   expect(options.dataSources).toEqual([{ provider: "fiber" }]);
+  expect(options.metadata.app).toBe("outmax");
   expect(options.outputSchema.properties.leads.maxItems).toBe(20);
   expect(options.query).toContain("Focus on US Shopify stores.");
   const context = stored.get("outmax:leads:context:agent_run_test");
@@ -158,6 +159,31 @@ test("creates one Fiber run with budget, validates, deduplicates, and separates 
   expect(logs.join("")).not.toContain(lead.workEmail);
   expect(logs.join("")).not.toContain("Website content fixture.");
   expect(logs.join("")).not.toContain("test-credential");
+});
+
+test("async submission saves the original run and returns without polling or creating a replacement", async () => {
+  const response = await POST(request({
+    prompt: "Find customers for https://elkagent.com. Focus on US Shopify stores.",
+    waitForResults: false,
+  }));
+  const data = await response.json();
+  expect(response.status).toBe(202);
+  expect(data.runId).toBe("agent_run_test");
+  expect(data.status).toBe("queued");
+  expect(data.returnedCount).toBe(0);
+  expect(create).toHaveBeenCalledTimes(1);
+  expect(get).not.toHaveBeenCalled();
+  expect(stored.get("outmax:leads:context:agent_run_test").prompt).toContain("US Shopify");
+  expect(stored.get("outmax:leads:run:agent_run_test").status).toBe("queued");
+  const result = await getRun(new Request("http://localhost/api/leads/agent_run_test"), {
+    params: Promise.resolve({ runId: "agent_run_test" }),
+  });
+  const detail = await result.json();
+  expect(result.status).toBe(200);
+  expect(detail.prompt).toContain("US Shopify");
+  expect(detail.website).toBe("https://elkagent.com/");
+  expect(detail.leads).toHaveLength(1);
+  expect(create).toHaveBeenCalledTimes(1);
 });
 
 test("returns 202 with last observed status if a poll hangs, without a replacement", async () => {
@@ -238,19 +264,25 @@ function readRun(runId = "agent_run_test") {
   });
 }
 
-test("lists all existing Exa runs, even when Redis has no record of older runs", async () => {
+test("lists Outmax runs, including legacy runs, while excluding unrelated account history", async () => {
   getAll.mockResolvedValueOnce([
-    completed, { id: "agent_run_old", status: "running", createdAt: "2026-10-08T18:00:00Z" },
+    { ...completed, request: { metadata: { app: "outmax" } } },
+    { id: "agent_run_new", status: "running", createdAt: "2026-10-08T18:00:00Z", request: { metadata: { app: "outmax" } } },
+    { ...completed, id: "agent_run_f368a73c383d4f5b9f2f793a3ec77204" },
+    { ...completed, id: "agent_run_unrelated" },
+    { id: "agent_run_old", status: "running" },
   ]);
   const response = await listRuns();
   const data = await response.json();
   expect(response.status).toBe(200);
-  expect(data.runCount).toBe(2);
+  expect(data.runCount).toBe(3);
   expect(data.runs[0].runId).toBe(completed.id);
   expect(data.runs[0].returnedCount).toBe(1);
   expect(data.runs[0].resultsAvailable).toBe(true);
   expect(data.runs[0].usage.ai.tokens).toBeNull();
   expect(data.runs[1].status).toBe("running");
+  expect(data.runs[2].runId).toBe("agent_run_f368a73c383d4f5b9f2f793a3ec77204");
+  expect(data.runs.map((run) => run.runId)).not.toContain("agent_run_unrelated");
   expect(data.runs[0]).not.toHaveProperty("leads");
   expect(getAll).toHaveBeenCalledWith({ limit: 100 });
   expect(create).not.toHaveBeenCalled();

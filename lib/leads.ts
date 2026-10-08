@@ -7,6 +7,7 @@ const url = z.httpUrl();
 
 export const requestSchema = z.object({
   prompt: text.max(8_000),
+  waitForResults: z.boolean().default(true),
 });
 
 export const icpSchema = z.object({

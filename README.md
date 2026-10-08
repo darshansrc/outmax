@@ -1,11 +1,14 @@
-# Outmax backend test
+# Outmax
 
 `POST /api/leads` retrieves a product website with Exa, generates an ICP with
 `generateText` + `Output.object` using **only** `gateway("openai/gpt-6.1-sol")`,
 and creates one Exa Agent run with Fiber enabled to find up to 20 companies and
 their decision-makers. Explicit instructions in the prompt override inferred
 preferences. Upstash Redis temporarily retains run snapshots and the original
-ICP/accounting. No UI, authentication, or outreach is added.
+ICP/accounting. The home page creates research and lists previous runs.
+`/leads/{runId}` shows status, the customer profile, companies, contact details,
+and supporting sources. Active run pages refresh every five seconds and stop
+when the run completes or a request fails. No authentication or outreach is added.
 
 Use Node.js 22 or newer and Bun (the repo's package manager):
 
@@ -29,14 +32,21 @@ curl -i http://localhost:3000/api/leads \
   -d '{"prompt":"Find customers for https://elkagent.com. Focus on US Shopify stores."}'
 ```
 
-List all Exa runs, including those created before Redis was added:
+The frontend sends `"waitForResults": false` alongside the prompt to return
+HTTP 202 immediately after the run and context are saved, then opens its status
+page. Omitting this option preserves the original polling behavior for curl.
+
+List Outmax research runs:
 
 ```bash
 curl -sS http://localhost:3000/api/leads
 ```
 
 The response contains `runs` (summaries without contact records) and `runCount`.
-The SDK fetches all pages, newest first. Each summary includes its run ID, status,
+The SDK fetches all pages and filters out unrelated Exa account history.
+The three original Outmax runs are retained explicitly; new runs are tagged
+with `metadata.app = "outmax"` so they remain visible after Redis expires.
+Each summary includes its run ID, status,
 timestamps, validated lead count, result availability, and known usage/costs.
 Listing does not generate an ICP or start a research run.
 

@@ -38,13 +38,27 @@ export interface RunContext {
   prompt: string;
   website: string;
   icp: ICP;
-  aiUsage: LanguageModelUsage;
+  aiUsage: LanguageModelUsage | null;
   websiteCost: CostDollars | null;
   budgetDollars: number;
 }
 
 export function isActive(run: AgentRun) {
   return run.status === "queued" || run.status === "running";
+}
+
+// These Outmax runs predate the app metadata used for new research.
+const legacyOutmaxRuns = new Set([
+  "agent_run_9bc6758d0b944872ade24721cea89899",
+  "agent_run_25550e9375ce422da103455d3a8b8343",
+  "agent_run_f368a73c383d4f5b9f2f793a3ec77204",
+]);
+
+export function isOutmaxRun(run: AgentRun, context: RunContext | null) {
+  const metadata = run.request?.metadata;
+  return legacyOutmaxRuns.has(run.id) || context !== null
+    || (typeof metadata === "object" && metadata !== null
+      && "app" in metadata && metadata.app === "outmax");
 }
 
 // Separate keys prevent a concurrent status refresh from overwriting the original accounting.
