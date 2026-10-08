@@ -3,40 +3,16 @@ import { gateway, generateText, Output, type LanguageModelUsage } from "ai";
 import Exa, { ExaError, type AgentRun, type CostDollars } from "exa-js";
 import { z } from "zod";
 import {
-  agentOutputSchema, cleanLeads, extractWebsite, icpSchema, MODEL,
+  agentOutputSchema, extractWebsite, icpSchema, MODEL,
   requestSchema, resultSchema, TARGET_COUNT, type ICP,
 } from "@/lib/leads";
+import { readLeadRuns } from "@/lib/lead-run-api";
+import { leadResult, RouteError, RunStore, setting, WaitTimeout, within } from "@/lib/lead-runs";
 
 // Cache Components disallows a runtime export; this route uses Next's default Node.js runtime.
 
-class RouteError extends Error {
-  constructor(message: string, readonly httpStatus: number) {
-    super(message);
-  }
-}
-
-class WaitTimeout extends Error {}
-
-async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new WaitTimeout()), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function setting(name: string, fallback: number, integer = false): number {
-  const value = Number(process.env[name] ?? fallback);
-  if (!Number.isFinite(value) || value <= 0 || (integer && !Number.isSafeInteger(value))) {
-    throw new RouteError(`${name} must be a positive ${integer ? "integer" : "number"}.`, 500);
-  }
-  return value;
+export async function GET() {
+  return readLeadRuns();
 }
 
 export async function POST(request: Request) {
@@ -47,6 +23,7 @@ export async function POST(request: Request) {
   let icp: ICP | null = null;
   let aiUsage: LanguageModelUsage | null = null;
   let websiteCost: CostDollars | null = null;
+  let store: RunStore | null = null;
 
   function log(status: string, fields: Record<string, unknown> = {}) {
     const entry = JSON.stringify({
@@ -105,6 +82,10 @@ export async function POST(request: Request) {
     const budgetDollars = setting("EXA_RUN_BUDGET_DOLLARS", 5);
     const timeoutMs = setting("EXA_POLL_TIMEOUT_MS", 120_000, true);
     const pollIntervalMs = setting("EXA_POLL_INTERVAL_MS", 2_000, true);
+    store = new RunStore();
+    step = "redis_check";
+    await store.check();
+    log("completed", { ttlSeconds: store.ttlSeconds });
     const exa = new Exa(process.env.EXA_API_KEY);
 
     step = "website_retrieval";
@@ -177,6 +158,12 @@ export async function POST(request: Request) {
       ].join("\n"),
     });
     log("created", { budgetDollars, runStatus: run.status });
+    step = "redis_write";
+    await store.saveContext(run.id, {
+      requestId, prompt, website, icp, aiUsage, websiteCost, budgetDollars,
+    });
+    await store.saveRun(run);
+    log("completed", { ttlSeconds: store.ttlSeconds });
 
     step = "exa_polling";
     const deadline = Date.now() + timeoutMs;
@@ -203,6 +190,10 @@ export async function POST(request: Request) {
       rawLeadCount: Array.isArray(rawLeads) ? rawLeads.length : null,
       usage: run.usage ?? null, costDollarsReported: run.costDollars ?? null,
     });
+    step = "redis_write";
+    await store.saveRun(run);
+    log("completed", { ttlSeconds: store.ttlSeconds });
+    step = "exa_completion";
     if (run.status !== "completed") {
       throw new RouteError(`Exa Agent run ${run.status} (stop reason: ${run.stopReason ?? "unreported"}).`, 502);
     }
@@ -213,14 +204,8 @@ export async function POST(request: Request) {
     log("completed", { rawLeadCount: result.data.leads.length });
 
     step = "deduplication";
-    const { leads, ...cleanup } = cleanLeads(result.data.leads);
+    const { leads, shortfallReason, cleanup } = leadResult(run);
     log("completed", { ...cleanup, returnedCount: leads.length });
-    const shortfallReason = leads.length === TARGET_COUNT ? null : [
-      result.data.shortfallReason ??
-        `Exa returned ${result.data.leads.length} companies; stop reason: ${run.stopReason ?? "unreported"}.`,
-      cleanup.duplicatesRemoved ? `${cleanup.duplicatesRemoved} duplicate companies removed.` : null,
-      cleanup.unsupportedRemoved ? `${cleanup.unsupportedRemoved} companies without qualification evidence removed.` : null,
-    ].filter(Boolean).join(" ");
 
     return respond({
       icp, leads, returnedCount: leads.length, shortfallReason,
@@ -233,7 +218,7 @@ export async function POST(request: Request) {
       log("timeout", { runStatus: run.status });
       return respond({
         icp, leads: [], returnedCount: 0,
-        shortfallReason: "Local polling timed out. The existing Exa run continues; inspect this run ID through Exa instead of submitting another POST.",
+        shortfallReason: `Local polling timed out. The existing Exa run continues; GET /api/leads/${run.id} to retrieve results without creating another run.`,
         runId: run.id, status: run.status, stopReason: run.stopReason ?? null,
         ...accounting(),
       }, 202);

@@ -30,8 +30,24 @@ const generateText = mock(async () => ({
 }));
 const create = mock(async () => ({ id: "agent_run_test", status: "queued" }));
 const get = mock(async () => completed);
+const getAll = mock(async () => [completed]);
 const getContents = mock(async () => ({
   results: [{ text: "Website content fixture." }], costDollars: { total: 0.001 },
+}));
+const stored = new Map();
+const redisGet = mock(async (key) => stored.get(key) ?? null);
+const redisSet = mock(async (key, value) => {
+  stored.set(key, JSON.parse(JSON.stringify(value)));
+  return "OK";
+});
+const redisMget = mock(async (...keys) => keys.map((key) => stored.get(key) ?? null));
+const redisPing = mock(async () => "PONG");
+mock.module("@upstash/redis", () => ({
+  Redis: {
+    fromEnv: () => ({
+      get: redisGet, set: redisSet, mget: redisMget, ping: redisPing,
+    }),
+  },
 }));
 const logs = [];
 const logSpy = spyOn(console, "log").mockImplementation((line) => logs.push(line));
@@ -42,14 +58,16 @@ mock.module("ai", () => ({
 mock.module("exa-js", () => ({
   default: class {
     getContents = getContents;
-    agent = { runs: { create, get } };
+    agent = { runs: { create, get, getAll } };
   },
   ExaError,
 }));
-const { POST } = await import("../app/api/leads/route.ts");
+const { POST, GET: listRuns } = await import("../app/api/leads/route.ts");
+const { GET: getRun } = await import("../app/api/leads/[runId]/route.ts");
 const envNames = [
   "EXA_API_KEY", "AI_GATEWAY_API_KEY", "EXA_RUN_BUDGET_DOLLARS",
   "EXA_POLL_TIMEOUT_MS", "EXA_POLL_INTERVAL_MS",
+  "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN", "LEADS_REDIS_TTL_SECONDS",
 ];
 const savedEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
 
@@ -58,7 +76,13 @@ beforeEach(() => {
   process.env.EXA_API_KEY = "exa-test-credential";
   process.env.AI_GATEWAY_API_KEY = "gateway-test-credential";
   process.env.EXA_POLL_INTERVAL_MS = "1";
-  for (const fn of [gateway, generateText, create, get, getContents]) fn.mockClear();
+  process.env.UPSTASH_REDIS_REST_URL = "https://redis.example.com";
+  process.env.UPSTASH_REDIS_REST_TOKEN = "redis-test-credential";
+  for (const fn of [
+    gateway, generateText, create, get, getAll, getContents,
+    redisGet, redisSet, redisMget, redisPing,
+  ]) fn.mockClear();
+  stored.clear();
   logs.length = 0;
 });
 afterAll(() => {
@@ -119,6 +143,11 @@ test("creates one Fiber run with budget, validates, deduplicates, and separates 
   expect(options.dataSources).toEqual([{ provider: "fiber" }]);
   expect(options.outputSchema.properties.leads.maxItems).toBe(20);
   expect(options.query).toContain("Focus on US Shopify stores.");
+  const context = stored.get("outmax:leads:context:agent_run_test");
+  expect(context.icp).toEqual(icp);
+  expect(context.aiUsage.totalTokens).toBe(150);
+  expect(stored.get("outmax:leads:run:agent_run_test").status).toBe("completed");
+  expect(redisSet.mock.calls.every(([, , options]) => options.ex === 86_400)).toBe(true);
   for (const line of logs) {
     const entry = JSON.parse(line);
     expect(entry.requestId).toBe(data.requestId);
@@ -201,4 +230,110 @@ test("removes unsupported companies/contacts and requires proof matching the ema
   expect(checked.leads[0].workEmail).toBeNull();
   expect(checked.leads[1].emailVerificationStatus).toBeNull();
   expect(checked.leads[2].emailVerificationStatus).toBe("verified");
+});
+
+function readRun(runId = "agent_run_test") {
+  return getRun(new Request(`http://localhost/api/leads/${runId}`), {
+    params: Promise.resolve({ runId }),
+  });
+}
+
+test("lists all existing Exa runs, even when Redis has no record of older runs", async () => {
+  getAll.mockResolvedValueOnce([
+    completed, { id: "agent_run_old", status: "running", createdAt: "2026-10-08T18:00:00Z" },
+  ]);
+  const response = await listRuns();
+  const data = await response.json();
+  expect(response.status).toBe(200);
+  expect(data.runCount).toBe(2);
+  expect(data.runs[0].runId).toBe(completed.id);
+  expect(data.runs[0].returnedCount).toBe(1);
+  expect(data.runs[0].resultsAvailable).toBe(true);
+  expect(data.runs[0].usage.ai.tokens).toBeNull();
+  expect(data.runs[1].status).toBe("running");
+  expect(data.runs[0]).not.toHaveProperty("leads");
+  expect(getAll).toHaveBeenCalledWith({ limit: 100 });
+  expect(create).not.toHaveBeenCalled();
+  expect(generateText).not.toHaveBeenCalled();
+});
+
+test("refreshes pending runs, validates results, then reads terminal results from Redis", async () => {
+  get.mockResolvedValueOnce({ ...completed, status: "running", output: null, stopReason: null });
+  const pending = await readRun();
+  expect(pending.status).toBe(202);
+  expect((await pending.json()).status).toBe("running");
+  expect(stored.get("outmax:leads:run:agent_run_test").status).toBe("running");
+  const response = await readRun();
+  const data = await response.json();
+  expect(response.status).toBe(200);
+  expect(data.source).toBe("exa");
+  expect(data.returnedCount).toBe(data.leads.length);
+  expect(data.leads[0].emailVerificationStatus).toBeNull();
+  expect(data.icp).toBeNull();
+  expect(data.usage.ai.tokens).toBeNull();
+  expect(data.costDollars.exaWebsiteReported).toBeNull();
+  const cached = await (await readRun()).json();
+  expect(cached.source).toBe("redis");
+  expect(cached.leads).toEqual(data.leads);
+  expect(get).toHaveBeenCalledTimes(2);
+  expect(create).not.toHaveBeenCalled();
+});
+
+test("retains the POST ICP and accounting for later reads without needing an AI key", async () => {
+  process.env.LEADS_REDIS_TTL_SECONDS = "3600";
+  await POST(request());
+  delete process.env.AI_GATEWAY_API_KEY;
+  const response = await readRun();
+  const data = await response.json();
+  expect(response.status).toBe(200);
+  expect(data.icp).toEqual(icp);
+  expect(data.usage.ai.tokens.totalTokens).toBe(150);
+  expect(data.costDollars.exaWebsiteReported.total).toBe(0.001);
+  expect(data.costDollars.exaAgentReported.total).toBe(4.8);
+  expect(redisSet.mock.calls.every(([, , options]) => options.ex === 3600)).toBe(true);
+  expect(create).toHaveBeenCalledTimes(1);
+  expect(generateText).toHaveBeenCalledTimes(1);
+});
+
+test("returns empty lists, validation failures, failed runs, and missing IDs clearly", async () => {
+  getAll.mockResolvedValueOnce([]);
+  const empty = await (await listRuns()).json();
+  expect(empty.runs).toEqual([]);
+  expect(empty.runCount).toBe(0);
+  expect((await readRun("../invalid")).status).toBe(400);
+  expect(get).not.toHaveBeenCalled();
+  get.mockRejectedValueOnce(new ExaError("upstream-private-content", 404));
+  const missing = await readRun();
+  expect(missing.status).toBe(404);
+  expect((await missing.json()).error).toBe("Run not found.");
+  get.mockResolvedValueOnce({ ...completed, status: "failed", stopReason: "error" });
+  const failed = await readRun();
+  expect(failed.status).toBe(502);
+  expect((await failed.json()).status).toBe("failed");
+  stored.clear();
+  get.mockResolvedValueOnce({ ...completed, output: { structured: { leads: "bad" } } });
+  const invalid = await readRun();
+  expect(invalid.status).toBe(502);
+  expect((await invalid.json()).step).toBe("output_validation");
+  expect(logs.join("")).not.toContain("upstream-private-content");
+});
+
+test("fails before paid calls when Redis is missing or unavailable, retaining IDs on later failures", async () => {
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  expect((await POST(request())).status).toBe(500);
+  expect(create).not.toHaveBeenCalled();
+  expect(getContents).not.toHaveBeenCalled();
+  process.env.UPSTASH_REDIS_REST_TOKEN = "redis-test-credential";
+  redisPing.mockRejectedValueOnce(new Error("private-redis-details"));
+  expect((await POST(request())).status).toBe(503);
+  expect(getContents).not.toHaveBeenCalled();
+  redisSet.mockRejectedValueOnce(new Error("private-redis-details"));
+  const failedSave = await POST(request());
+  const data = await failedSave.json();
+  expect(failedSave.status).toBe(503);
+  expect(data.runId).toBe("agent_run_test");
+  expect(create).toHaveBeenCalledTimes(1);
+  redisGet.mockRejectedValueOnce(new Error("private-redis-details"));
+  expect((await readRun()).status).toBe(503);
+  expect(logs.join("")).not.toContain("private-redis-details");
 });
