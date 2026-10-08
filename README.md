@@ -1,36 +1,94 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Outmax backend test
 
-## Getting Started
+`POST /api/leads` retrieves a product website with Exa, generates an ICP with
+`generateText` + `Output.object` using **only** `gateway("openai/gpt-6.1-sol")`,
+and creates one Exa Agent run with Fiber enabled to find up to 20 companies and
+their decision-makers. Explicit instructions in the prompt override inferred
+preferences. No UI, database, authentication, or outreach is added.
 
-First, run the development server:
+Use Node.js 22 or newer and Bun (the repo's package manager):
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+bun install
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The existing `.env` must contain `EXA_API_KEY` and `AI_GATEWAY_API_KEY`. Next.js
+loads them server-side. Keep their existing values; do not put them in the curl
+request or use a `NEXT_PUBLIC_` prefix. This repo enables Cache Components, which
+disallows a route-level `runtime` export; the route runs on the default Node.js
+runtime and imports `node:crypto`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Example request:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+curl -i --max-time 240 http://localhost:3000/api/leads \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Find customers for https://elkagent.com. Focus on US Shopify stores."}'
+```
 
-## Learn More
+Include exactly one public HTTP(S) product website URL. Ambiguous/missing URLs,
+embedded URL credentials, malformed JSON, and empty prompts return HTTP 400.
 
-To learn more about Next.js, take a look at the following resources:
+Optional server environment variables (leave unset to use defaults):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `EXA_RUN_BUDGET_DOLLARS`: positive dollar amount; default **5**. Sent as
+  `budget.maxCostDollars` with `effort: "auto"`. This ceiling applies to the
+  Agent run; website retrieval and the separate AI call have their own usage.
+- `EXA_POLL_TIMEOUT_MS`: positive integer; default **120000**. Starts after run
+  creation. This controls the local wait, not the lifetime of the remote run.
+- `EXA_POLL_INTERVAL_MS`: positive integer; default **2000**.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+A completed run returns HTTP 200 with `icp`, `leads`, `returnedCount`,
+`shortfallReason`, `runId`, `usage`, and `costDollars`, plus the actual Exa
+`status` and `stopReason`. The count always comes from the cleaned array.
+`shortfallReason` is `null` for 20 leads and explains fewer results, including
+deduplication and removal of companies without qualification evidence.
 
-## Deploy on Vercel
+Each lead has `companyName`, `website`, `location`, `fitExplanation`,
+`sourceUrls`, `contactName`, `jobTitle`, `workEmail`, `linkedInUrl`,
+`contactDataSource`, `contactSourceUrls`, `emailVerificationStatus`, and
+`emailVerificationEvidence`. Unavailable details are `null`. Contacts without
+an identified source and supporting URLs are cleared. A verified email requires
+evidence naming the exact address, actual verifier result, verifier source,
+and its supporting URL. Missing or mismatched proof clears the verified claim.
+Research claims still require review of the returned sources; shape validation
+alone cannot establish their factual accuracy.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`usage.ai.tokens` contains reported AI token usage; `usage.exaAgent` contains
+reported Agent usage. `costDollars.exaWebsiteReported` and
+`costDollars.exaAgentReported` are separate Exa-reported cost breakdowns.
+Unreported usage/costs are `null`; AI dollars are not estimated from token usage.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+On polling timeout, HTTP **202** includes the existing `runId`, last observed
+Exa `status`, ICP, available accounting, and an empty lead array. The remote run
+continues within its budget; no replacement is created. Inspect that same run
+with `exa.agent.runs.get(runId)` or the Exa dashboard. Another POST creates a new,
+billable run. This minimal route does not add a resume endpoint.
+
+Upstream failures return HTTP 502, configuration errors HTTP 500, and retrieval
+or AI timeouts HTTP 504. Model failures identify the exact required model and
+never silently fall back. Every response includes a `requestId`, also returned
+in `X-Request-Id`. Server console logs are JSON lines with `requestId`, `step`,
+`status`, and `elapsedMs`; they record actual retrieval/generation results and
+Agent status polls, without website text, complete contacts, or credentials.
+
+Checks:
+
+```bash
+bun test
+bun run typecheck
+bun run lint
+bun run build
+```
+
+Tests mock paid services; they do not consume API credits.
+
+References used alongside the installed SDK types:
+
+- [AI SDK structured generation](https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data)
+- [AI Gateway](https://ai-sdk.dev/providers/ai-sdk-providers/ai-gateway)
+- [Exa Agent creation](https://exa.ai/docs/reference/agent-api/create-a-run)
+- [Exa Agent polling](https://exa.ai/docs/reference/agent-api/get-a-run)
+- [Fiber provider](https://exa.ai/docs/agent/connect/fiber)
+- [Zod JSON Schema](https://zod.dev/json-schema)
