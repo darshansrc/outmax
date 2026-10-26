@@ -8,13 +8,13 @@ curl -i http://localhost:3000/api/leads/orchestrated \
   -d '{"prompt":"Find ideal customers for https://rankingcopilot.com. Only include law firms that prepare legal directory submissions."}'
 ```
 
-It uses exactly `gateway("openai/gpt-6.1-sol")` with `generateText`,
-`Output.object`, and `tools.exa_search = gateway.tools.exaSearch()`. The model
+It uses the shared model from `lib/provider.ts` (`openai.gpt-6.1-sol` on Amazon
+Bedrock) with `generateText`, `Output.object`, and the local Exa search tool from
+`lib/web-search.ts` as `tools.exa_search`. The model
 researches the product, infers an ICP, searches for companies, and decides which
-companies qualify in three calls: a native Exa research phase, a separate
+companies qualify in three calls: an Exa research phase, a separate
 `Output.object` company-selection phase without tools, and a call to the local
-contact tool. This avoids coupling the Gateway's internal search loop to local
-tool execution or final JSON parsing. Selection receives bounded source excerpts.
+contact tool. This keeps the search loop separate from final JSON parsing. Selection receives bounded source excerpts.
 Required criteria have quotations and URLs from those excerpts. Duplicate
 companies and companies lacking supported quotations are excluded with an
 explanation; deciding whether the quotations establish fit remains the model's
@@ -26,7 +26,7 @@ It creates one Exa Agent run with Fiber enabled **only for contact
 enrichment**, using a shared $5 default batch budget. Results are merged by
 company domain and supported current employer; Exa cannot add or replace
 companies. Unsupported contact details remain `null`, and verified emails
-require matching verification evidence. This prototype uses `AI_GATEWAY_API_KEY`
+require matching verification evidence. This prototype uses `BEDROCK_API_KEY`
 and `EXA_API_KEY`, and does not require Redis or add runs to the existing UI.
 The selection is serialized into a metadata string because the live Exa API
 requires string metadata values. The status endpoint parses that saved selection.
@@ -53,24 +53,23 @@ Optional settings: `ORCHESTRATED_MAX_STEPS` defaults to **12** (3–40),
 `ORCHESTRATED_TIMEOUT_MS` to **240000**, and the existing
 `EXA_POLL_TIMEOUT_MS`, `EXA_POLL_INTERVAL_MS`, and `EXA_RUN_BUDGET_DOLLARS`
 control contact polling and its budget. The step limit bounds SDK steps;
-Gateway may execute multiple native searches in one step. Research is instructed
+the model may run several searches in one step. Research is instructed
 to aim for 24 searches, which is a prompt guideline, not an enforced cost cap.
 The overall timeout bounds the request. The $5 budget applies to the contact run;
-Gateway research and AI generation have separate charges. Logs contain
+Exa searches and AI generation have separate charges. Logs contain
 `requestId`, `step`, `status`, and `elapsedMs`, plus actual search inputs,
 bounded result excerpts, ICP/selected-company data, token usage, polls, run
 IDs, and reported costs. Emails, complete contact records, full website text,
 and credentials are omitted. AI requests allow one SDK retry for retryable
 upstream failures using the same model; non-retryable errors are not retried.
-Gateway failures include a redacted message, upstream HTTP status, and a
-generation ID when supplied. Structured-output failures identify their phase
+Model provider failures include a redacted message and upstream HTTP status. Structured-output failures identify their phase
 and cause without logging model output. AI token usage is aggregated from
 completed SDK steps even when a later phase fails. URL fields use a compatible string schema for
 OpenAI structured output, with HTTP(S) validation applied locally.
 A new POST creates a new research attempt.
 
 `POST /api/leads` retrieves a product website with Exa, generates an ICP with
-`generateText` + `Output.object` using **only** `gateway("openai/gpt-6.1-sol")`,
+`generateText` + `Output.object` using **only** the model from `lib/provider.ts`,
 and creates one Exa Agent run with Fiber enabled to find up to 20 companies and
 their decision-makers. Explicit instructions in the prompt override inferred
 preferences. Upstash Redis temporarily retains run snapshots and the original
@@ -206,7 +205,7 @@ Tests mock Exa, AI, and Redis; they do not consume API credits.
 References used alongside the installed SDK types:
 
 - [AI SDK structured generation](https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data)
-- [AI Gateway](https://ai-sdk.dev/providers/ai-sdk-providers/ai-gateway)
+- [Amazon Bedrock provider](https://ai-sdk.dev/providers/ai-sdk-providers/amazon-bedrock)
 - [Exa Agent creation](https://exa.ai/docs/reference/agent-api/create-a-run)
 - [Exa Agent polling](https://exa.ai/docs/reference/agent-api/get-a-run)
 - [Exa Agent list](https://exa.ai/docs/reference/agent-api/list-runs)

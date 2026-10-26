@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { gateway, generateText, isStepCount, Output, tool, type LanguageModelUsage } from "ai";
+import { generateText, isStepCount, Output, tool, type LanguageModelUsage } from "ai";
 import Exa, { type AgentRun } from "exa-js";
 import { z } from "zod";
-import { extractWebsite, MODEL, TARGET_COUNT } from "@/lib/leads";
+import { extractWebsite, TARGET_COUNT } from "@/lib/leads";
+import { model, MODEL, modelUnavailable } from "@/lib/provider";
+import { createWebSearchTool } from "@/lib/web-search";
 import { isActive, RouteError, setting, WaitTimeout, within } from "@/lib/lead-runs";
 import {
   contactResultSchema, evidenceUrl, PROTOTYPE_APP, prototypeErrorDetails, prototypeLogger, prototypeResult,
@@ -55,7 +57,7 @@ export async function POST(request: Request) {
     log(step, "completed", { website, promptLength: prompt.length });
 
     step = "configuration";
-    for (const key of ["AI_GATEWAY_API_KEY", "EXA_API_KEY"]) {
+    for (const key of ["BEDROCK_API_KEY", "EXA_API_KEY"]) {
       if (!process.env[key]?.trim()) throw new RouteError(`${key} is not configured.`, 500);
     }
     const maxSteps = setting("ORCHESTRATED_MAX_STEPS", 12, true);
@@ -176,12 +178,12 @@ export async function POST(request: Request) {
     step = "research";
     log(step, "started", { model: MODEL });
     const research = await generateText({
-      model: gateway("openai/gpt-6.1-sol"),
+      model,
       maxRetries: 1,
       maxOutputTokens: 6_000,
       abortSignal: signal,
       stopWhen: isStepCount(maxSteps),
-      tools: { exa_search: gateway.tools.exaSearch() },
+      tools: { exa_search: createWebSearchTool({ maxResults: 10, textCharacters: 3_000 }) },
       instructions: [
         "Research the product and prospective customers using exa_search. This phase only produces a research brief, not contacts or a final JSON response.",
         "First search the supplied product website and retrieve text or highlights. Do not infer the product from its domain name.",
@@ -205,10 +207,6 @@ export async function POST(request: Request) {
         for (const result of event.toolResults) {
           if (result.dynamic || result.toolName !== "exa_search") continue;
           const output = result.output;
-          if ("error" in output) {
-            log("exa_search", "error", { stepNumber: event.stepNumber, toolCallId: result.toolCallId, errorType: output.error, upstreamStatus: output.statusCode });
-            continue;
-          }
           const collect = (rows: typeof output.results) => {
             for (const row of rows) {
               const excerpt = [row.text, ...(row.highlights ?? [])].filter(Boolean).join("\n");
@@ -239,7 +237,7 @@ export async function POST(request: Request) {
     step = "structured_selection";
     log(step, "started", { model: MODEL, sourceCount: excerpts.length, excerptCharacters: 120_000 - remainingCharacters });
     const structured = await generateText({
-      model: gateway("openai/gpt-6.1-sol"),
+      model,
       maxRetries: 1,
       maxOutputTokens: 12_000,
       abortSignal: signal,
@@ -264,7 +262,7 @@ export async function POST(request: Request) {
       step = "contact_orchestration";
       log(step, "started", { model: MODEL, companyCount: selected.companies.length });
       await generateText({
-        model: gateway("openai/gpt-6.1-sol"),
+        model,
         maxRetries: 1,
         maxOutputTokens: 256,
         abortSignal: signal,
@@ -298,15 +296,15 @@ export async function POST(request: Request) {
     }
     const status = error instanceof RouteError ? error.httpStatus : timeout ? 504 : 502;
     const message = error instanceof RouteError ? error.message
-      : details.upstreamErrorType === "GatewayModelNotFoundError"
-        ? `${MODEL} is unavailable through AI Gateway; no fallback model was used.`
+      : modelUnavailable(error)
+        ? `${MODEL} is unavailable on Bedrock; no fallback model was used.`
         : timeout ? "Prototype timed out. Any reported contact run continues; retrieve that run instead of submitting again."
         : details.structuredOutputMessage
           ? `Invalid structured company selection: ${details.structuredOutputMessage}`
         : details.exaMessage
           ? `Exa contact lookup failed (HTTP ${details.exaStatus}): ${details.exaMessage}`
         : details.upstreamMessage
-          ? `AI Gateway rejected the ${MODEL} request${details.upstreamStatus ? ` (HTTP ${details.upstreamStatus})` : ""}: ${details.upstreamMessage}`
+          ? `Bedrock rejected the ${MODEL} request${details.upstreamStatus ? ` (HTTP ${details.upstreamStatus})` : ""}: ${details.upstreamMessage}`
         : `Failed during ${step} using ${MODEL}. No fallback model was used.`;
     log(step, timeout ? "timeout" : "error", { runId: contactState.current?.id ?? null, ...details, httpStatus: status });
     return respond({

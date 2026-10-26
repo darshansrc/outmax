@@ -44,7 +44,7 @@ export function SiteForm({ center, onColor, id = "url" }: { center?: boolean; on
         </button>
       </div>
       <p id={`${id}-note`} role={error ? "alert" : undefined} className={`mt-3 text-[13px] ${center ? "text-center" : ""} ${error ? (onColor ? "font-medium text-white" : "text-red-600") : (onColor ? "text-white/90" : "text-zinc-600")}`}>
-        {error ?? "20 free leads · Ready in 5 minutes · No credit card"}
+        {error ?? "10 free leads · Email drafts included · No credit card"}
       </p>
     </form>
   );

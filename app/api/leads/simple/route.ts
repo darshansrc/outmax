@@ -13,6 +13,7 @@ import type { SimpleChatMessage } from "@/lib/simple-chat";
 import { ChatStore, ChatStoreError } from "@/lib/chat-store";
 import { createFiberTools } from "@/lib/fiber-tools";
 import { createWebSearchTool } from "@/lib/web-search";
+import { model } from "@/lib/provider";
 
 export const maxDuration = 300;
 
@@ -51,8 +52,8 @@ export async function POST(request: Request) {
     return Response.json({ error: "Provide chat messages or a non-empty prompt." }, { status: 400 });
   }
 
-  if (!process.env.AI_GATEWAY_API_KEY?.trim()) {
-    return Response.json({ error: "AI_GATEWAY_API_KEY is not configured." }, { status: 503 });
+  if (!process.env.BEDROCK_API_KEY?.trim()) {
+    return Response.json({ error: "BEDROCK_API_KEY is not configured." }, { status: 503 });
   }
 
   try {
@@ -110,7 +111,7 @@ export async function POST(request: Request) {
     }));
     const saved = await store.save(chatId, validated.data, existing);
     const result = streamText({
-      model: "openai/gpt-6.1-sol",
+      model,
       system: [
         "You are Outmax, a helpful research assistant. Use web search when useful, cite sources, and keep answers clear and concise.",
         "Use Fiber tools to discover companies and decision-makers, retrieve work emails, look up profiles from emails, and validate email deliverability.",

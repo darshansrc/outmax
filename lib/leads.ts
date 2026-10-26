@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-export const MODEL = "openai/gpt-6.1-sol";
 export const TARGET_COUNT = 20;
+export const MAX_LEADS = 50;
 const text = z.string().trim().min(1);
 const url = z.httpUrl();
 
@@ -54,14 +54,16 @@ export const leadSchema = z.object({
 });
 
 export const resultSchema = z.object({
-  leads: z.array(leadSchema).max(TARGET_COUNT),
+  leads: z.array(leadSchema).max(MAX_LEADS),
   shortfallReason: text.nullable(),
 });
 
 // Send plain JSON Schema: exa-js's Zod overload uses its own Zod 3 dependency.
-export const agentOutputSchema = z.toJSONSchema(resultSchema, {
-  target: "draft-07",
-});
+export function agentOutputSchemaFor(count: number) {
+  return z.toJSONSchema(resultSchema.extend({ leads: z.array(leadSchema).max(count) }), { target: "draft-07" });
+}
+
+export const agentOutputSchema = agentOutputSchemaFor(TARGET_COUNT);
 
 export type ICP = z.infer<typeof icpSchema>;
 export type Lead = z.infer<typeof leadSchema>;

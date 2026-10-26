@@ -1,5 +1,5 @@
-import { gateway, generateText, Output } from "ai";
-import { MODEL } from "./leads";
+import { generateText, Output } from "ai";
+import { model } from "./provider";
 import { DRAFT_DAYS, draftsOutputSchema, type DraftEmail, type Lead } from "./onboarding";
 import type { OnboardingContext } from "./onboarding-store";
 
@@ -21,9 +21,22 @@ const rules = [
   "Return one sequence per lead, with leadIndex matching the input index.",
 ].join("\n");
 
+const BATCH = 10;
+
+/** Writes sequences in parallel batches so large searches stay inside one call's time limit. */
 export async function writeDrafts(context: OnboardingContext, leads: Lead[]) {
+  const batches = Array.from({ length: Math.ceil(leads.length / BATCH) }, (_, index) => index * BATCH);
+  const results = await Promise.all(batches.map((start) => writeBatch(context, leads.slice(start, start + BATCH))));
+  const sequences: Record<number, DraftEmail[]> = {};
+  results.forEach((batch, index) => {
+    for (const [leadIndex, emails] of Object.entries(batch)) sequences[batches[index] + Number(leadIndex)] = emails;
+  });
+  return sequences;
+}
+
+async function writeBatch(context: OnboardingContext, leads: Lead[]) {
   const generated = await generateText({
-    model: gateway(MODEL),
+    model,
     output: Output.object({ schema: draftsOutputSchema }),
     maxRetries: 1,
     timeout: 180_000,

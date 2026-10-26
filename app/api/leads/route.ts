@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { gateway, generateText, Output, type LanguageModelUsage } from "ai";
+import { generateText, Output, type LanguageModelUsage } from "ai";
 import Exa, { ExaError, type AgentRun, type CostDollars } from "exa-js";
 import { z } from "zod";
 import {
-  agentOutputSchema, extractWebsite, icpSchema, MODEL,
+  agentOutputSchema, extractWebsite, icpSchema,
   requestSchema, resultSchema, TARGET_COUNT, type ICP,
 } from "@/lib/leads";
 import { readLeadRuns } from "@/lib/lead-run-api";
 import { leadResult, RouteError, RunStore, setting, WaitTimeout, within } from "@/lib/lead-runs";
+import { model, MODEL, modelUnavailable } from "@/lib/provider";
 
 // Cache Components disallows a runtime export; this route uses Next's default Node.js runtime.
 
@@ -76,7 +77,7 @@ export async function POST(request: Request) {
     log("completed", { url: website });
 
     step = "configuration";
-    for (const name of ["EXA_API_KEY", "AI_GATEWAY_API_KEY"]) {
+    for (const name of ["EXA_API_KEY", "BEDROCK_API_KEY"]) {
       if (!process.env[name]?.trim()) throw new RouteError(`${name} is not configured.`, 500);
     }
     const budgetDollars = setting("EXA_RUN_BUDGET_DOLLARS", 5);
@@ -105,7 +106,7 @@ export async function POST(request: Request) {
     step = "icp_generation";
     log("started", { model: MODEL });
     const generated = await generateText({
-      model: gateway("openai/gpt-6.1-sol"),
+      model,
       output: Output.object({ schema: icpSchema }),
       maxRetries: 0,
       timeout: 60_000,
@@ -241,9 +242,9 @@ export async function POST(request: Request) {
       message = `Timed out during ${failingStep}.`;
     } else if (failingStep === "icp_generation" && !(error instanceof z.ZodError)) {
       // Never expose upstream bodies (which may contain prompts/credentials), or retry with another model.
-      message = error instanceof Error && error.name === "GatewayModelNotFoundError"
-        ? `${MODEL} is unavailable through AI Gateway; no fallback model was used.`
-        : `ICP generation with ${MODEL} failed. Confirm AI Gateway access to this exact model and structured output support; no fallback model was used.`;
+      message = modelUnavailable(error)
+        ? `${MODEL} is unavailable on Bedrock; no fallback model was used.`
+        : `ICP generation with ${MODEL} failed. Confirm Bedrock access to this exact model and structured output support; no fallback model was used.`;
     }
     log(httpStatus === 504 ? "timeout" : "error", {
       failingStep, errorType: error instanceof Error ? error.name : "UnknownError",

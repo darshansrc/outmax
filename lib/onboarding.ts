@@ -1,10 +1,16 @@
 import { z } from "zod";
-import { leadSchema, TARGET_COUNT } from "./leads";
+import { leadSchema, MAX_LEADS } from "./leads";
 
 const text = z.string().trim().min(1);
 const list = z.array(text);
 
 export const DRAFT_DAYS = [1, 3, 7] as const;
+
+export const ENGINES = ["outmax", "exa"] as const;
+export type Engine = (typeof ENGINES)[number];
+export const ENGINE_LABELS: Record<Engine, string> = { outmax: "Outmax agent", exa: "Exa agent" };
+
+export const LEAD_COUNT = { min: 5, max: MAX_LEADS, default: 10 } as const;
 
 export const businessSchema = z.object({
   name: text,
@@ -16,6 +22,12 @@ export const businessSchema = z.object({
 });
 
 export const profileSchema = z.object({
+  idealCustomer: z.string().trim().max(800).describe(
+    "Two or three plain sentences describing the company most likely to buy now: its stage and size, what it is doing, the problem it has and why this product suits it better than the alternatives.",
+  ),
+  notAFit: list.describe(
+    "Kinds of companies that look relevant but would not buy, such as companies too large or too established for the product, or those who already solved the problem in-house.",
+  ),
   industries: list,
   companySizeMin: z.number().int().positive().nullable().describe("Minimum employees, or null when unknown."),
   companySizeMax: z.number().int().positive().nullable().describe("Maximum employees, or null when unbounded or unknown."),
@@ -33,6 +45,8 @@ export const startRunSchema = z.object({
   business: businessSchema,
   profile: profileSchema,
   senderName: z.string().trim().max(80).nullable(),
+  engine: z.enum(ENGINES).default("outmax"),
+  leadCount: z.number().int().min(LEAD_COUNT.min).max(LEAD_COUNT.max).default(LEAD_COUNT.default),
 });
 
 export const draftEmailSchema = z.object({
@@ -71,6 +85,16 @@ export type OnboardingRun = {
   leads: Lead[];
   shortfallReason: string | null;
   drafts: DraftState | null;
+  engine: Engine;
+  leadCount: number;
+  /** Spend so far by provider. Model inference is not included. */
+  costs: { exaSearchDollars: number; exaAgentDollars: number; fiberCredits: number } | null;
+  progress: {
+    stage: string;
+    checked: number;
+    accepted: number;
+    rejected: { companyName: string; website: string; reason: string }[];
+  } | null;
   error?: string;
 };
 
@@ -100,11 +124,14 @@ export function sizeLabel(profile: Pick<Profile, "companySizeMin" | "companySize
   return null;
 }
 
-export function searchQuery({ website, business, profile }: StartRun) {
+export function searchQuery({ website, business, profile, leadCount }: StartRun) {
   const size = sizeLabel(profile);
   return [
-    `Find ${TARGET_COUNT} distinct companies that are likely to buy from ${business.name} (${website}) now.`,
+    `Find ${leadCount} distinct companies that are likely to buy from ${business.name} (${website}) now.`,
     `What they sell: ${business.oneLiner}`,
+    profile.idealCustomer ? `The ideal customer: ${profile.idealCustomer}` : null,
+    profile.notAFit?.length ? `Not a fit, so skip: ${profile.notAFit.join("; ")}.` : null,
+    "Only include companies that would realistically adopt this product now. Skip famous or large companies that have clearly outgrown it or already run their own solution, unless the ideal customer says otherwise.",
     profile.industries.length ? `Industries: ${profile.industries.join("; ")}.` : null,
     size ? `Company size: ${size}.` : null,
     profile.regions.length ? `Regions: ${profile.regions.join("; ")}.` : null,

@@ -1,5 +1,6 @@
 import { Redis } from "@upstash/redis";
 import type { AgentRun } from "exa-js";
+import type { AgentState } from "./agent-leads/engine";
 import { RouteError, setting } from "./lead-runs";
 import type { DraftState, StartRun } from "./onboarding";
 
@@ -62,5 +63,23 @@ export class OnboardingStore {
 
   async releaseDrafts(runId: string) {
     await this.execute(this.redis.del(key("drafts-lock", runId)));
+  }
+
+  getAgent(runId: string) {
+    return this.execute(this.redis.get<AgentState>(key("agent", runId)));
+  }
+
+  async saveAgent(runId: string, state: AgentState) {
+    await this.execute(this.redis.set(key("agent", runId), state, { ex: this.ttlSeconds }));
+  }
+
+  /** One search round at a time. Must outlive the route's maxDuration so rounds never overlap. */
+  async claimAgent(runId: string) {
+    const claimed = await this.execute(this.redis.set(key("agent-lock", runId), 1, { nx: true, ex: 310 }));
+    return claimed === "OK";
+  }
+
+  async releaseAgent(runId: string) {
+    await this.execute(this.redis.del(key("agent-lock", runId)));
   }
 }

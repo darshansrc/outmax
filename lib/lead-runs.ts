@@ -1,7 +1,8 @@
 import { Redis } from "@upstash/redis";
 import type { LanguageModelUsage } from "ai";
 import type { AgentRun, CostDollars } from "exa-js";
-import { cleanLeads, MODEL, resultSchema, TARGET_COUNT, type ICP } from "./leads";
+import { cleanLeads, resultSchema, TARGET_COUNT, type ICP } from "./leads";
+import { MODEL } from "./provider";
 
 export class RouteError extends Error {
   constructor(message: string, readonly httpStatus: number) {
@@ -117,11 +118,11 @@ export class RunStore {
   }
 }
 
-export function leadResult(run: AgentRun) {
+export function leadResult(run: AgentRun, target = TARGET_COUNT) {
   const result = resultSchema.safeParse(run.output?.structured);
   if (!result.success) throw new RouteError("Exa Agent returned an invalid lead structure.", 502);
   const { leads, ...cleanup } = cleanLeads(result.data.leads);
-  const shortfallReason = leads.length === TARGET_COUNT ? null : [
+  const shortfallReason = leads.length >= target ? null : [
     result.data.shortfallReason ??
       `Exa returned ${result.data.leads.length} companies; stop reason: ${run.stopReason ?? "unreported"}.`,
     cleanup.duplicatesRemoved ? `${cleanup.duplicatesRemoved} duplicate companies removed.` : null,

@@ -61,7 +61,7 @@ const { GET, POST } = await import("../../app/api/leads/simple/route.ts");
 const { GET: getChat } = await import("../../app/api/leads/simple/[chatId]/route.ts");
 const { ChatStore, CHAT_INDEX_KEY, chatKey } = await import("../../lib/chat-store.ts");
 const chatId = "c1dd4f69-01a8-4fa1-965a-11b85fd4a0b8";
-const envNames = ["AI_GATEWAY_API_KEY", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"];
+const envNames = ["BEDROCK_API_KEY", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"];
 const savedEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
 
 beforeEach(() => {

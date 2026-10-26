@@ -21,7 +21,7 @@ export function Landing() {
         <Signals />
         <Connector />
         <Box id="use-cases">
-          <SectionHead title="More meetings, whoever is doing the selling." accent="Founders, sales teams and agencies use the same five-minute search." />
+          <SectionHead title="More meetings, whoever is doing the selling." accent="Founders, sales teams and agencies use the same search." />
           <UseCases />
         </Box>
         <Connector />
@@ -66,13 +66,13 @@ function Hero() {
       <div className="px-6 pt-16 pb-14 text-center sm:px-11 sm:pt-24 sm:pb-16">
         <p className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white py-1 pr-3 pl-1 text-[13px] font-medium tracking-[-0.01em] text-zinc-600">
           <span className="rounded-full bg-[#3448d6]/10 px-2 py-0.5 text-[12px] font-semibold text-[#3448d6]">Free</span>
-          Your first 20 leads are on us
+          Your first 10 leads are on us
         </p>
         <h1 className="mx-auto mt-6 max-w-[720px] text-[40px] leading-[1.1] font-medium tracking-[-0.035em] text-zinc-950 sm:text-[52px]">
           Find companies ready to buy from you this week
         </h1>
         <p className="mx-auto mt-5 max-w-[34rem] text-[16px] leading-6 text-zinc-700">
-          Stop sending cold emails to lists that never reply. Paste your website and get companies that are hiring, growing or spending on exactly what you sell, plus the decision-maker and a verified email at each.
+          Paste your website. We work out who really buys from you, find companies that fit and check each one. You get the decision-maker, their email and three drafts ready to send.
         </p>
         <div className="mt-9"><SiteForm center /></div>
       </div>
@@ -100,11 +100,11 @@ function Marker({ n, className = "" }: { n: number; className?: string }) {
 
 function Anatomy() {
   const parts = [
-    ["A company that fits", "Right industry, right size, right market for what you sell."],
+    ["A company that fits", "Right kind of business, right size, right market. Not a giant that outgrew what you sell."],
     ["A reason to reach out today", "They’re hiring for it, investing in it or talking about it publicly."],
-    ["Proof you can check", "The exact page we found it on, so you never pitch on a guess."],
-    ["The person who signs off", "Not a junior employee. The one who owns the budget."],
-    ["An email that won’t bounce", "Verified before it reaches you. If we can’t verify it, we tell you."],
+    ["Proof you can check", "A quote from the exact page we found it on, so you never pitch on a guess."],
+    ["The person who signs off", "Not a junior employee. The one who owns the budget, with their LinkedIn."],
+    ["An email, and what to say", "Marked verified when it passes a deliverability check. Plus a three-email sequence written for them."],
   ];
   return (
     <Box>
@@ -172,18 +172,18 @@ const steps: { n: string; title: string; body: string; tone: keyof typeof panelT
   },
   {
     n: "02", title: "Confirm your buyer", tone: "magenta",
-    body: "We write your ideal customer for you. Want only US companies, or a different title? Just say so.",
-    tile: <Tile rows={[["Industry", "Law firms"], ["Size", "20–500"], ["Buyer", "Head of BD"]]} />,
+    body: "We draft your ideal customer: who they are, how big, and who looks right but won’t buy. Change anything, then pick how many leads you want.",
+    tile: <Tile rows={[["Industry", "Law firms"], ["Size", "20–500"], ["Not a fit", "Global firms"]]} />,
   },
   {
-    n: "03", title: "We find who’s buying", tone: "amber",
-    body: "We scan job posts, news, team pages and rankings for companies that need you right now.",
-    tile: <Tile rows={[["legal 500 submission", "28"], ["directories manager", "41"], ["chambers BD team", "33"]]} />,
+    n: "03", title: "We find and check", tone: "amber",
+    body: "Our agent searches job posts, news, directories and team pages, then checks every company against your buyer. Weak fits are rejected, and you can see why.",
+    tile: <Tile rows={[["Passed", "10"], ["Too big", "3"], ["No proof of fit", "2"]]} />,
   },
   {
     n: "04", title: "Start emailing", tone: "blue",
-    body: "Get a shortlist of companies, decision-makers and verified emails. Weak leads are cut before you see them.",
-    tile: <Tile rows={[["Kept", "18"], ["No proof of fit", "4"], ["Duplicates", "2"]]} />,
+    body: "Get each company with the decision-maker, their email and LinkedIn, and drafts for day 1, 3 and 7. Export it all to CSV.",
+    tile: <Tile rows={[["Day 1", "First email"], ["Day 3", "Follow-up"], ["Day 7", "New angle"]]} />,
   },
 ];
 
@@ -207,7 +207,7 @@ function HowItWorks() {
     <Box id="how">
       <div className="flex flex-col justify-between gap-6 px-6 pt-16 pb-12 sm:px-11 sm:pt-20 md:flex-row md:items-end">
         <h2 className="max-w-xl text-[32px] leading-[1.15] font-medium tracking-[-0.03em] sm:text-[40px]">
-          Your first leads in 5 minutes. No setup.
+          Your first leads in minutes. No setup.
         </h2>
         <p className="max-w-xs text-[15px] leading-6 text-zinc-700">No filters, no spreadsheets, no training. If you can paste a link, you can use Outmax.</p>
       </div>
@@ -262,11 +262,11 @@ function Signals() {
 
 function ExampleSearch() {
   const stats = [
-    ["5 min", "from website to leads"],
-    ["18", "companies ready to buy"],
-    ["12", "decision-makers found"],
-    ["9", "verified emails"],
-    ["$3.42", "total cost of the search"],
+    ["10", "companies that passed every check"],
+    ["5", "rejected, each with a reason"],
+    ["9", "decision-makers found"],
+    ["8", "work emails, 5 verified"],
+    ["30", "email drafts ready to send"],
   ];
   return (
     <Box>
@@ -292,11 +292,11 @@ function Pricing() {
   const plans = [
     {
       name: "Free", price: "$0", unit: "", blurb: "See the leads we find for you before you pay anything.", cta: "Get my free leads", href: "/onboarding", featured: false,
-      items: ["1 search", "Up to 20 companies", "Decision-maker at each", "No credit card needed"],
+      items: ["1 search", "Up to 10 companies", "Decision-maker and email drafts for each", "No credit card needed"],
     },
     {
       name: "Pro", price: "$79", unit: "/month", blurb: "For founders and reps who want a full pipeline every month.", cta: "Start with Pro", href: "/onboarding", featured: true,
-      items: ["15 searches a month", "Up to 300 companies a month", "Verified emails", "Target any market or title", "API access"],
+      items: ["15 searches a month", "Up to 50 companies per search", "Work emails, verified where possible", "Target any market or title", "CSV export"],
     },
     {
       name: "Team", price: "Custom", unit: "", blurb: "For sales teams and agencies running searches every week.", cta: "Talk to us", href: "mailto:hello@outmax.app", featured: false,
@@ -334,11 +334,12 @@ function Pricing() {
 
 const faqs = [
   ["How is this different from Apollo or ZoomInfo?", "They sell you everyone who matches a filter, whether they need you or not. We only give you companies with a visible reason to buy right now, and we show you that reason, so your first email lands."],
-  ["Will this work for my business?", "If you sell to other businesses and have a website, yes. Your free search will show you within five minutes, before you pay anything."],
-  ["How accurate are the emails?", "We only mark an email verified after it passes a check. If we can’t verify one, we tell you instead of guessing, so your sender reputation stays safe."],
+  ["How do you decide a company fits?", "Every company is checked against your ideal customer. Each must-have needs a quote from a real page, and companies that are too big, already solved the problem or sit on your not-a-fit list are rejected. You can see every rejected company and why."],
+  ["Will this work for my business?", "If you sell to other businesses and have a website, yes. Your free search will show you in minutes, before you pay anything."],
+  ["How accurate are the emails?", "Emails come from public pages or Fiber’s contact data, never guessed from a pattern. We mark an email verified only when it passes a deliverability check, and label the rest unverified."],
   ["Where do the leads come from?", "Public sources: company websites, job posts, news, directories and professional profiles. Every lead links to the page we found it on."],
-  ["Do you send the emails for me?", "No. We find who to contact and what to say first. You send from your own inbox or the tool you already use."],
-  ["Can I get leads into my CRM?", "Today you can pull leads through our API. CSV export and direct CRM sync are coming soon."],
+  ["Do you send the emails for me?", "No. We write a three-email sequence for each lead, and you send it from your own inbox or the tool you already use."],
+  ["Can I get leads into my CRM?", "Export any search to CSV and import it into your CRM. Direct CRM sync is coming."],
 ];
 
 function Faq() {
@@ -374,9 +375,9 @@ function Closing() {
       <LatticePanel tone="blue">
         <div className="px-6 py-24 text-center sm:py-28">
           <h2 className="mx-auto max-w-2xl text-[40px] leading-[1.08] font-medium tracking-[-0.04em] text-white sm:text-[60px]">
-            Get your first 20 leads free
+            Get your first 10 leads free
           </h2>
-          <p className="mx-auto mt-5 max-w-lg text-[18px] font-medium tracking-[-0.02em] text-white/90">Paste your website. In 5 minutes you’ll know which companies need you this week and exactly who to email.</p>
+          <p className="mx-auto mt-5 max-w-lg text-[18px] font-medium tracking-[-0.02em] text-white/90">Paste your website. In minutes you’ll know which companies need you this week, who to email and what to say.</p>
           <div className="mt-9"><SiteForm center onColor id="url-footer" /></div>
         </div>
       </LatticePanel>

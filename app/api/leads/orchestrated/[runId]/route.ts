@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Exa, { ExaError } from "exa-js";
 import { z } from "zod";
-import { MODEL } from "@/lib/leads";
+import { MODEL } from "@/lib/provider";
 import { isActive, RouteError, WaitTimeout, within } from "@/lib/lead-runs";
 import { prototypeLogger, prototypeResult, prototypeSelection } from "@/lib/orchestrated-leads";
 

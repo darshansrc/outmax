@@ -3,11 +3,12 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, ChevronDown } from "lucide-react";
 import { cn } from "cn";
 import { Button, Input, Label, TagInput, Textarea } from "@/components/brand/controls";
 import { SiteForm } from "@/components/landing/site-form";
-import { sizeLabel, type Business, type Profile } from "@/lib/onboarding";
+import { ENGINE_LABELS, LEAD_COUNT, sizeLabel, type Business, type Engine, type Profile } from "@/lib/onboarding";
+import { ENGINE_NOTES, EngineButton } from "./engine-button";
 import { Favicon } from "./icons";
 import { rememberRun, useRecentRuns } from "./recent";
 import { PanelLabel, Pill, Shell, Spinner, formatDate, hostname } from "./shell";
@@ -22,7 +23,7 @@ export function Onboarding() {
 const steps = [
   ["Paste your website", "We read your homepage and up to 5 key pages to learn what you sell."],
   ["Confirm your buyer", "Check the industries, roles and buying signals we drafted. Change anything."],
-  ["Get leads and emails", "Up to 20 companies, each with a decision-maker and three email drafts."],
+  ["Get leads and emails", "Up to 50 companies, each with a decision-maker and three email drafts."],
 ];
 
 function Start() {
@@ -174,6 +175,8 @@ function Review({ analysis }: { analysis: Analysis }) {
   const [business, setBusiness] = useState(analysis.business);
   const [profile, setProfile] = useState(analysis.profile);
   const [senderName, setSenderName] = useState("");
+  const [engine, setEngine] = useState<Engine>("outmax");
+  const [leadCount, setLeadCount] = useState<number>(LEAD_COUNT.default);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const label = hostname(analysis.website);
@@ -197,7 +200,7 @@ function Review({ analysis }: { analysis: Analysis }) {
       const response = await fetch("/api/onboarding/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ website: analysis.website, business, profile, senderName: senderName.trim() || null }),
+        body: JSON.stringify({ website: analysis.website, business, profile, senderName: senderName.trim() || null, engine, leadCount }),
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "We couldn’t start the search.");
@@ -226,11 +229,13 @@ function Review({ analysis }: { analysis: Analysis }) {
         ))}
       </dl>
       <div className="mt-5">
-        <Button type="submit" form="profile" size="sm" disabled={pending} className="w-full">
-          {pending ? <><Spinner className="size-3 border-zinc-600 border-t-white" />Starting…</> : "Find leads"}
-        </Button>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <label htmlFor="lead-count" className="text-[12px] text-zinc-500">Leads to find</label>
+          <LeadCount id="lead-count" value={leadCount} onChange={setLeadCount} />
+        </div>
+        <EngineButton form="profile" engine={engine} onEngine={setEngine} pending={pending} />
         <p role={error ? "alert" : undefined} className={cn("mt-2 text-[12px] leading-[18px]", error ? "text-red-600" : "text-zinc-500")}>
-          {error ?? "Up to 20 companies. Takes 3–8 minutes."}
+          {error ?? <><span className="font-medium text-zinc-700">{ENGINE_LABELS[engine]}.</span> {ENGINE_NOTES[engine]}</>}
         </p>
       </div>
       <PanelLabel className="mt-6 border-t border-zinc-100 pt-4">Pages we read</PanelLabel>
@@ -277,6 +282,10 @@ function Review({ analysis }: { analysis: Analysis }) {
           </Section>
 
           <Section title="Who buys from you" description="The companies the search looks for.">
+            <Field id="ideal-customer" label="Ideal customer" hint="In your words: their stage, size and why they’d pick you. The search judges every company against this.">
+              <Textarea id="ideal-customer" rows={3} className="field-sizing-content min-h-20" value={profile.idealCustomer ?? ""} onChange={(event) => editProfile("idealCustomer")(event.target.value)}
+                placeholder="Indie and early-stage SaaS teams who want to charge globally without setting up billing, tax and compliance themselves." />
+            </Field>
             <Pair>
               <Field id="industries" label="Industries">
                 <TagInput id="industries" value={profile.industries} onChange={editProfile("industries")} placeholder="Law firms" />
@@ -301,10 +310,13 @@ function Review({ analysis }: { analysis: Analysis }) {
               <Field id="must-haves" label="Must-haves" hint="Every company has to meet all of these.">
                 <TagInput id="must-haves" value={profile.mustHaves} onChange={editProfile("mustHaves")} placeholder="Has a sales team" />
               </Field>
-              <Field id="exclusions" label="Leave out" hint="Types of company to skip.">
-                <TagInput id="exclusions" value={profile.exclusions} onChange={editProfile("exclusions")} placeholder="Agencies" />
+              <Field id="not-a-fit" label="Not a fit" hint="Looks relevant but won’t buy.">
+                <TagInput id="not-a-fit" value={profile.notAFit ?? []} onChange={editProfile("notAFit")} placeholder="Enterprises with in-house billing" />
               </Field>
             </Pair>
+            <Field id="exclusions" label="Leave out" hint="Companies or types of company to skip.">
+              <TagInput id="exclusions" value={profile.exclusions} onChange={editProfile("exclusions")} placeholder="Agencies" />
+            </Field>
           </Section>
 
           <Section title="Decision-maker" description="The person we find at each company.">
@@ -321,7 +333,8 @@ function Review({ analysis }: { analysis: Analysis }) {
         </div>
 
         <div className="mt-8 flex items-center gap-3 lg:hidden">
-          <Button type="submit" size="sm" disabled={pending}>{pending ? "Starting…" : "Find leads"}</Button>
+          <LeadCount id="lead-count-mobile" value={leadCount} onChange={setLeadCount} aria-label="Leads to find" />
+          <EngineButton form="profile" engine={engine} onEngine={setEngine} pending={pending} className="w-56" />
           {error && <p role="alert" className="text-[13px] text-red-600">{error}</p>}
         </div>
       </form>
@@ -344,6 +357,24 @@ function Section({ title, description, children }: { title: string; description:
       </div>
       <div className="max-w-[720px] space-y-5">{children}</div>
     </section>
+  );
+}
+
+const leadCounts = [5, 10, 15, 20, 25, 30, 40, 50].filter((count) => count >= LEAD_COUNT.min && count <= LEAD_COUNT.max);
+
+function LeadCount({ value, onChange, ...props }: { id: string; value: number; onChange: (value: number) => void; "aria-label"?: string }) {
+  return (
+    <div className="relative">
+      <select
+        {...props}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="h-8 appearance-none rounded-lg border border-zinc-300 bg-white pr-7 pl-2.5 text-[13px] font-medium text-zinc-950 outline-none hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2"
+      >
+        {leadCounts.map((count) => <option key={count} value={count}>{count}</option>)}
+      </select>
+      <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2 text-zinc-500" />
+    </div>
   );
 }
 

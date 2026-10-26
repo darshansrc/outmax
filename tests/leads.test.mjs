@@ -23,7 +23,7 @@ const completed = {
   usage: { searches: 3, dataSources: { fiber: 1 } },
   costDollars: { total: 4.8, dataSources: { fiber: 0.5 } },
 };
-const gateway = mock((model) => ({ modelId: model }));
+const model = { modelId: "openai.gpt-6.1-sol" };
 const generateText = mock(async () => ({
   output: icp, totalUsage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
   finishReason: "stop",
@@ -53,7 +53,10 @@ const logs = [];
 const logSpy = spyOn(console, "log").mockImplementation((line) => logs.push(line));
 const errorSpy = spyOn(console, "error").mockImplementation((line) => logs.push(line));
 mock.module("ai", () => ({
-  gateway, generateText, Output: { object: (options) => options },
+  generateText, Output: { object: (options) => options },
+}));
+mock.module("../lib/provider.ts", () => ({
+  model, MODEL: "openai.gpt-6.1-sol", modelUnavailable: (error) => error?.statusCode === 404,
 }));
 mock.module("exa-js", () => ({
   default: class {
@@ -65,7 +68,7 @@ mock.module("exa-js", () => ({
 const { POST, GET: listRuns } = await import("../app/api/leads/route.ts");
 const { GET: getRun } = await import("../app/api/leads/[runId]/route.ts");
 const envNames = [
-  "EXA_API_KEY", "AI_GATEWAY_API_KEY", "EXA_RUN_BUDGET_DOLLARS",
+  "EXA_API_KEY", "BEDROCK_API_KEY", "EXA_RUN_BUDGET_DOLLARS",
   "EXA_POLL_TIMEOUT_MS", "EXA_POLL_INTERVAL_MS",
   "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN", "LEADS_REDIS_TTL_SECONDS",
 ];
@@ -74,12 +77,12 @@ const savedEnv = Object.fromEntries(envNames.map((name) => [name, process.env[na
 beforeEach(() => {
   for (const name of envNames) delete process.env[name];
   process.env.EXA_API_KEY = "exa-test-credential";
-  process.env.AI_GATEWAY_API_KEY = "gateway-test-credential";
+  process.env.BEDROCK_API_KEY = "bedrock-test-credential";
   process.env.EXA_POLL_INTERVAL_MS = "1";
   process.env.UPSTASH_REDIS_REST_URL = "https://redis.example.com";
   process.env.UPSTASH_REDIS_REST_TOKEN = "redis-test-credential";
   for (const fn of [
-    gateway, generateText, create, get, getAll, getContents,
+    generateText, create, get, getAll, getContents,
     redisGet, redisSet, redisMget, redisPing,
   ]) fn.mockClear();
   stored.clear();
@@ -134,7 +137,7 @@ test("creates one Fiber run with budget, validates, deduplicates, and separates 
   expect(data.usage.exaAgent).toEqual(completed.usage);
   expect(data.costDollars.exaAgentReported.total).toBe(4.8);
   expect(data.costDollars.exaWebsiteReported.total).toBe(0.001);
-  expect(gateway).toHaveBeenCalledWith("openai/gpt-6.1-sol");
+  expect(generateText.mock.calls[0][0].model).toBe(model);
   expect(generateText.mock.calls[0][0].output.schema).toBeDefined();
   expect(create).toHaveBeenCalledTimes(1);
   const options = create.mock.calls[0][0];
@@ -212,15 +215,15 @@ test("honors configured budgets and rejects invalid settings before retrieval", 
 
 test("reports exact-model unavailability without fallback or upstream content", async () => {
   const error = new Error("upstream-private-content");
-  error.name = "GatewayModelNotFoundError";
+  error.statusCode = 404;
   generateText.mockRejectedValueOnce(error);
   const response = await POST(request());
   const data = await response.json();
   expect(response.status).toBe(502);
-  expect(data.error).toContain("openai/gpt-6.1-sol is unavailable");
+  expect(data.error).toContain("openai.gpt-6.1-sol is unavailable");
   expect(data.error).toContain("no fallback");
   expect(create).not.toHaveBeenCalled();
-  expect(gateway).toHaveBeenCalledTimes(1);
+  expect(generateText).toHaveBeenCalledTimes(1);
   expect(JSON.stringify(data) + logs.join("")).not.toContain("upstream-private-content");
 });
 
@@ -314,7 +317,7 @@ test("refreshes pending runs, validates results, then reads terminal results fro
 test("retains the POST ICP and accounting for later reads without needing an AI key", async () => {
   process.env.LEADS_REDIS_TTL_SECONDS = "3600";
   await POST(request());
-  delete process.env.AI_GATEWAY_API_KEY;
+  delete process.env.BEDROCK_API_KEY;
   const response = await readRun();
   const data = await response.json();
   expect(response.status).toBe(200);

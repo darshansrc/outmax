@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { gateway, generateText, Output } from "ai";
+import { generateText, Output } from "ai";
 import Exa from "exa-js";
 import { z } from "zod";
-import { MODEL } from "@/lib/leads";
+import { model } from "@/lib/provider";
 import { RouteError, WaitTimeout, within } from "@/lib/lead-runs";
 import { analysisSchema, normalizeWebsite } from "@/lib/onboarding";
 
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     if (!website) throw new RouteError("Enter your company website, like acme.com.", 400);
 
     step = "configuration";
-    for (const name of ["EXA_API_KEY", "AI_GATEWAY_API_KEY"]) {
+    for (const name of ["EXA_API_KEY", "BEDROCK_API_KEY"]) {
       if (!process.env[name]?.trim()) throw new RouteError(`${name} is not configured.`, 500);
     }
 
@@ -51,12 +51,18 @@ export async function POST(request: Request) {
 
     step = "profile_generation";
     const generated = await generateText({
-      model: gateway(MODEL),
+      model,
       output: Output.object({ schema: analysisSchema }),
       maxRetries: 1,
       timeout: 90_000,
       system: [
         "You read a company's website and describe the business and the customers most likely to buy from it.",
+        "Work out who realistically buys before filling the profile. Use the evidence: price points and plans, self-serve signup versus 'book a demo', the customer logos and testimonials, the positioning (for example 'for indie hackers', 'for startups', 'for enterprises'), and the setup pain the product removes.",
+        "A product with public, low or usage-based pricing and instant signup usually sells to small and early companies, not to market leaders who already run their own solution. Say so in idealCustomer and notAFit.",
+        "idealCustomer: two or three plain sentences a founder would agree with, naming stage, size, situation and why they would choose this product over the alternatives.",
+        "notAFit: up to 4 kinds of companies that look relevant but would not buy, such as companies that have outgrown the product or already built it in-house.",
+        "Always estimate companySizeMin and companySizeMax from that evidence. Use null for both only when the product truly fits companies of any size.",
+        "Industries should name the kinds of businesses that buy, such as 'SaaS startups' or 'Digital product creators'. Never leave industries empty.",
         "Base every field on the website text. Use null or empty arrays when the site does not support a field.",
         "Write short, plain phrases a founder would recognise, such as \"Law firms\" or \"Head of Business Development\".",
         "Industries, regions and buyer titles: at most 5 items each. Buying signals, must-haves and exclusions: at most 4 items each.",

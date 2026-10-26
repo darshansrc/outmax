@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { ArrowUpRight, Check, ChevronDown, ChevronUp, Copy, Globe, Mail, X } from "lucide-react";
 import { cn } from "cn";
 import { Button, Input, Textarea } from "@/components/brand/controls";
-import { type DraftEmail, type Lead, type OnboardingRun } from "@/lib/onboarding";
+import { ENGINE_LABELS, type DraftEmail, type Lead, type OnboardingRun } from "@/lib/onboarding";
 import { Favicon, Flag, LinkedInLogo } from "./icons";
 import { RecentSearches, idealCustomer } from "./setup";
 import { PanelLabel, Pill, Shell, Spinner, formatDate, hostname } from "./shell";
@@ -116,6 +116,7 @@ function RunView({ runId }: { runId: string }) {
   const minutes = run.createdAt && now ? Math.max(0, Math.round((now - new Date(run.createdAt).getTime()) / 60_000)) : null;
   const retry = `/onboarding?site=${encodeURIComponent(label)}`;
   const openLead = open !== null ? leads[open] : undefined;
+  const progress = run.progress;
 
   const status = active(run.status)
     ? <Pill><Spinner />Searching{minutes ? ` · ${minutes} min` : ""}</Pill>
@@ -146,7 +147,9 @@ function RunView({ runId }: { runId: string }) {
           <div className="flex min-h-12 flex-wrap items-center justify-between gap-3 border-b border-zinc-200 px-5 py-2">
             <p className="text-[13px] text-zinc-600">
               {active(run.status)
-                ? "Searching for companies that match your ideal customer. Usually 3–8 minutes."
+                ? progress
+                  ? <><span className="font-medium text-zinc-950">{progress.accepted}</span> of {run.leadCount} passed · <span className="font-medium text-zinc-950">{progress.checked}</span> checked · <span className="font-medium text-zinc-950">{progress.rejected.length}</span> rejected</>
+                  : "Searching for companies that match your ideal customer. Usually 5–10 minutes."
                 : <><span className="font-medium text-zinc-950">{leads.length}</span> companies · <span className="font-medium text-zinc-950">{withEmail}</span> with email · <span className="font-medium text-zinc-950">{verified}</span> verified</>}
             </p>
             {leads.length > 0 && <Button variant="secondary" size="sm" className="h-8 px-3 text-[13px]" onClick={() => exportCsv(run)}>Export CSV</Button>}
@@ -203,8 +206,8 @@ function RunView({ runId }: { runId: string }) {
               </li>
             ))}
             {active(run.status) && (
-              <li className="flex h-[60px] items-center gap-2 border-b border-zinc-100 px-5 text-[12px] text-zinc-400">
-                <Globe className="size-3.5" />Reviewing companies…
+              <li className="flex h-[60px] min-w-0 items-center gap-2 border-b border-zinc-100 px-5 text-[12px] text-zinc-400">
+                <Globe className="size-3.5 shrink-0" /><span className="truncate">{progress ? `${progress.stage}…` : "Reviewing companies…"}</span>
               </li>
             )}
           </ul>
@@ -212,6 +215,8 @@ function RunView({ runId }: { runId: string }) {
           {run.status === "completed" && run.shortfallReason && (
             <p className="px-5 py-4 text-[12px] leading-[18px] text-zinc-500">{run.shortfallReason}</p>
           )}
+
+          {progress && progress.rejected.length > 0 && <Rejected rows={progress.rejected} />}
         </>
       )}
 
@@ -222,6 +227,44 @@ function RunView({ runId }: { runId: string }) {
         />
       )}
     </Shell>
+  );
+}
+
+function Rejected({ rows }: { rows: NonNullable<OnboardingRun["progress"]>["rejected"] }) {
+  return (
+    <details className="group border-t border-zinc-200">
+      <summary className="flex h-11 cursor-pointer list-none items-center gap-2 px-5 text-[12px] text-zinc-500 hover:text-zinc-950 [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="size-3.5 -rotate-90 transition-transform group-open:rotate-0" />
+        {rows.length} {rows.length === 1 ? "company" : "companies"} didn’t pass
+      </summary>
+      <ul aria-label="Rejected companies" className="pb-4">
+        {rows.toReversed().map((row) => (
+          <li key={row.website} className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)] items-baseline gap-4 px-5 py-1.5 pl-[42px] text-[12px]">
+            <a href={row.website} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 text-zinc-700 hover:text-zinc-950">
+              <Favicon url={row.website} className="size-3.5 translate-y-0.5" /><span className="truncate">{row.companyName}</span>
+            </a>
+            <span className="text-zinc-500">{row.reason}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function Costs({ costs, live }: { costs: NonNullable<OnboardingRun["costs"]>; live: boolean }) {
+  const rows = [
+    ["Exa search", costs.exaSearchDollars ? `$${costs.exaSearchDollars.toFixed(2)}` : null],
+    ["Exa agent", costs.exaAgentDollars ? `$${costs.exaAgentDollars.toFixed(2)}` : null],
+    ["Fiber", costs.fiberCredits ? `${Math.round(costs.fiberCredits * 100) / 100} credits` : null],
+  ].filter((row): row is [string, string] => !!row[1]);
+  if (!rows.length) return null;
+  return (
+    <p className="mt-3 text-[11px] leading-[18px] text-zinc-400" title="AI model usage isn’t included.">
+      {live ? "Cost so far: " : "Cost: "}
+      {rows.map(([label, value], index) => (
+        <span key={label}>{index > 0 && " · "}{label} <span className="font-mono text-zinc-500">{value}</span></span>
+      ))}
+    </p>
   );
 }
 
@@ -252,7 +295,9 @@ function RunPanel({ run, runId }: { run: OnboardingRun; runId: string }) {
           <dt className="text-zinc-500">Email drafts</dt>
           <dd className="font-medium text-zinc-800">{drafts === "ready" ? "Ready" : drafts === "failed" ? "Failed" : run.status === "completed" ? "Writing…" : "After search"}</dd>
         </div>
+        <div className="flex justify-between gap-3"><dt className="text-zinc-500">Engine</dt><dd className="font-medium text-zinc-800">{ENGINE_LABELS[run.engine]}</dd></div>
       </dl>
+      {run.costs && <Costs costs={run.costs} live={active(run.status)} />}
       <div className="mt-6 border-t border-zinc-100 pt-4"><RecentSearches activeRunId={runId} /></div>
     </div>
   );

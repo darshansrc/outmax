@@ -47,8 +47,8 @@ export function HeroDemo() {
             </div>
             <span className="inline-flex h-7 shrink-0 items-center gap-2 rounded-full border border-zinc-200 px-2.5 text-[12px] font-medium text-zinc-700 tabular-nums">
               {running
-                ? <><span className="size-3 animate-spin rounded-full border-[1.5px] border-zinc-300 border-t-zinc-900" />Searching · {count} found</>
-                : <><span className="size-1.5 rounded-full bg-emerald-500" />Done · 18 companies · $3.42</>}
+                ? <><span className="size-3 animate-spin rounded-full border-[1.5px] border-zinc-300 border-t-zinc-900" />Searching · {count} of {leads.length} passed</>
+                : <><span className="size-1.5 rounded-full bg-emerald-500" />Done · {leads.length} companies</>}
             </span>
           </div>
 
@@ -57,12 +57,10 @@ export function HeroDemo() {
               <p className="text-[11px] font-medium text-zinc-500">Ideal customer</p>
               <p className="mt-2 text-[13px] leading-5 text-zinc-900">Law firms of 20–500 lawyers that prepare their own legal directory submissions.</p>
               <dl className="mt-4 space-y-2 border-t border-zinc-100 pt-4 text-[12px]">
-                {[["Region", "UK, US, Nordics"], ["Buyer", "Head of BD"], ["Signal", "Directory submissions"]].map(([key, value]) => (
-                  <div key={key} className="flex justify-between gap-2"><dt className="text-zinc-500">{key}</dt><dd className="truncate font-medium text-zinc-800">{value}</dd></div>
+                {[["Region", "UK, US, Nordics"], ["Buyer", "Head of BD"], ["Signal", "Directory submissions"], ["Not a fit", "Global firms"]].map(([key, value]) => (
+                  <div key={key} className="flex justify-between gap-2"><dt className="shrink-0 text-zinc-500">{key}</dt><dd className="truncate font-medium text-zinc-800">{value}</dd></div>
                 ))}
-              </dl>
-              <div className="mt-5 rounded-lg border border-zinc-200 px-3 py-2 text-[12px] text-zinc-400">Steer this search…</div>
-            </aside>
+              </dl>            </aside>
 
             <div className="min-w-0">
               <div className={`hidden h-9 items-center gap-4 border-b border-zinc-200 px-4 text-[11px] font-medium text-zinc-500 md:grid ${columns}`}>

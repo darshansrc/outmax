@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { NoObjectGeneratedError, RetryError, type LanguageModelUsage } from "ai";
+import { APICallError, NoObjectGeneratedError, RetryError, type LanguageModelUsage } from "ai";
 import { ExaError, type AgentRun } from "exa-js";
 import { cleanLeads, icpSchema, leadSchema, TARGET_COUNT } from "./leads";
 import { isActive, RouteError } from "./lead-runs";
@@ -199,7 +199,7 @@ export function prototypeSelection(run: AgentRun) {
 
 function redactText(value: string) {
   let safe = value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email redacted]");
-  for (const key of ["AI_GATEWAY_API_KEY", "EXA_API_KEY", "UPSTASH_REDIS_REST_TOKEN"]) {
+  for (const key of ["BEDROCK_API_KEY", "EXA_API_KEY", "UPSTASH_REDIS_REST_TOKEN"]) {
     const secret = process.env[key];
     if (secret) safe = safe.replaceAll(secret, "[credential redacted]");
   }
@@ -208,7 +208,7 @@ function redactText(value: string) {
 
 export function prototypeErrorDetails(error: unknown) {
   const upstream = RetryError.isInstance(error) ? error.lastError : error;
-  const gatewayError = upstream instanceof Error && upstream.name.startsWith("Gateway")
+  const gatewayError = upstream instanceof Error && (upstream.name.startsWith("Gateway") || APICallError.isInstance(upstream))
     ? upstream as Error & { statusCode?: number; generationId?: string; isRetryable?: boolean } : null;
   const exaError = upstream instanceof ExaError ? upstream : null;
   let exaValidationIssues: { code: string; path: (string | number)[]; message: string }[] | null = null;
