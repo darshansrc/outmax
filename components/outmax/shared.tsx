@@ -8,13 +8,16 @@ export function Header() {
   return (
     <header className="border-b bg-background">
       <div className="mx-auto flex h-20 max-w-6xl items-center justify-between px-5 sm:px-8">
-        <Link href="/" className="flex items-center gap-2.5 text-xl font-semibold tracking-tight" aria-label="Outmax home">
+        <Link href="/research" className="flex items-center gap-2.5 text-xl font-semibold tracking-tight" aria-label="Outmax home">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <Command className="size-5" strokeWidth={2.4} />
           </span>
           outmax<span className="-ml-2 text-primary">.</span>
         </Link>
-        <span className="text-xs text-muted-foreground">Your next customer, found.</span>
+        <div className="flex items-center gap-5">
+          <Link href="/simple" className="text-sm font-medium text-muted-foreground hover:text-foreground">Chat</Link>
+          <span className="hidden text-xs text-muted-foreground sm:block">Your next customer, found.</span>
+        </div>
       </div>
     </header>
   );

@@ -137,7 +137,7 @@ export function RunDetail({ runId }: { runId: string }) {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-5 pb-16 pt-8 sm:px-8 sm:pt-10">
-      <Link href="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />All research</Link>
+      <Link href="/research" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />All research</Link>
       {loading && !run ? <RunLoading /> : (
         <>
           <div className="mt-8 flex flex-wrap items-start justify-between gap-4">

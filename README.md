@@ -1,5 +1,74 @@
 # Outmax
 
+The separate **orchestrated prototype** is `POST /api/leads/orchestrated`:
+
+```bash
+curl -i http://localhost:3000/api/leads/orchestrated \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Find ideal customers for https://rankingcopilot.com. Only include law firms that prepare legal directory submissions."}'
+```
+
+It uses exactly `gateway("openai/gpt-6.1-sol")` with `generateText`,
+`Output.object`, and `tools.exa_search = gateway.tools.exaSearch()`. The model
+researches the product, infers an ICP, searches for companies, and decides which
+companies qualify in three calls: a native Exa research phase, a separate
+`Output.object` company-selection phase without tools, and a call to the local
+contact tool. This avoids coupling the Gateway's internal search loop to local
+tool execution or final JSON parsing. Selection receives bounded source excerpts.
+Required criteria have quotations and URLs from those excerpts. Duplicate
+companies and companies lacking supported quotations are excluded with an
+explanation; deciding whether the quotations establish fit remains the model's
+responsibility.
+
+The model then calls the `exa_contacts` tool once. The tool uses the validated
+company list retained by the backend, rather than having the model retype it.
+It creates one Exa Agent run with Fiber enabled **only for contact
+enrichment**, using a shared $5 default batch budget. Results are merged by
+company domain and supported current employer; Exa cannot add or replace
+companies. Unsupported contact details remain `null`, and verified emails
+require matching verification evidence. This prototype uses `AI_GATEWAY_API_KEY`
+and `EXA_API_KEY`, and does not require Redis or add runs to the existing UI.
+The selection is serialized into a metadata string because the live Exa API
+requires string metadata values. The status endpoint parses that saved selection.
+
+The response includes `icp`, `leads`, `returnedCount`, `shortfallReason`,
+`contactLookupReason`, `runId`, `statusUrl`, `status`, `stopReason`, `usage`, and
+`costDollars`. Reported search and contact-run costs are separate from AI token
+usage; unreported costs are `null`. No AI dollar estimate is made. Pending
+contact lookups return HTTP 202 with qualified companies and their unavailable
+contact fields set to `null`. Retrieve the same contact run without creating
+another:
+
+```bash
+curl -i http://localhost:3000/api/leads/orchestrated/YOUR_RUN_ID
+```
+
+The GET returns HTTP 202 while active, 200 on completion, or 502 for failed,
+cancelled, or invalid outputs. It retrieves the selection stored with that
+contact run and merges contacts without rerunning the orchestrator. Earlier AI
+token usage and search costs are unavailable on this GET and are returned as
+`null`; retain the POST response for that accounting.
+
+Optional settings: `ORCHESTRATED_MAX_STEPS` defaults to **12** (3–40),
+`ORCHESTRATED_TIMEOUT_MS` to **240000**, and the existing
+`EXA_POLL_TIMEOUT_MS`, `EXA_POLL_INTERVAL_MS`, and `EXA_RUN_BUDGET_DOLLARS`
+control contact polling and its budget. The step limit bounds SDK steps;
+Gateway may execute multiple native searches in one step. Research is instructed
+to aim for 24 searches, which is a prompt guideline, not an enforced cost cap.
+The overall timeout bounds the request. The $5 budget applies to the contact run;
+Gateway research and AI generation have separate charges. Logs contain
+`requestId`, `step`, `status`, and `elapsedMs`, plus actual search inputs,
+bounded result excerpts, ICP/selected-company data, token usage, polls, run
+IDs, and reported costs. Emails, complete contact records, full website text,
+and credentials are omitted. AI requests allow one SDK retry for retryable
+upstream failures using the same model; non-retryable errors are not retried.
+Gateway failures include a redacted message, upstream HTTP status, and a
+generation ID when supplied. Structured-output failures identify their phase
+and cause without logging model output. AI token usage is aggregated from
+completed SDK steps even when a later phase fails. URL fields use a compatible string schema for
+OpenAI structured output, with HTTP(S) validation applied locally.
+A new POST creates a new research attempt.
+
 `POST /api/leads` retrieves a product website with Exa, generates an ICP with
 `generateText` + `Output.object` using **only** `gateway("openai/gpt-6.1-sol")`,
 and creates one Exa Agent run with Fiber enabled to find up to 20 companies and

@@ -46,6 +46,25 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --font-landing: var(--font-hanken);
+  --font-plex: var(--font-plex-mono);}
+
+@theme {
+  --color-ink: #171721;
+  --color-ink-2: #1e1e2a;
+  --color-ink-3: #272735;
+  --color-mist: #ededf3;
+  --color-mist-2: #c3c3cc;
+  --color-iris: #5266eb;
+  --color-iris-soft: #cdddff;
+  --color-paper: #fcfcfa;
+  --color-paper-2: #f6f5f2;
+  --color-paper-3: #efeee9;
+  --color-soot: #2a2924;
+  --color-soot-2: #5a5548;
+  --color-hairline: rgb(138 117 60 / 0.16);
+  --color-hairline-dark: rgb(175 178 206 / 0.16);
+  --color-brand: #3448d6;
 }
 
 :root {

@@ -2,7 +2,7 @@
 
 import { useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, ChevronRight, Clock3, Globe2, LoaderCircle, Plus, RefreshCw, Search, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,7 +16,8 @@ const EXAMPLE = "Find customers for https://elkagent.com. Focus on US Shopify st
 
 export function Home() {
   const router = useRouter();
-  const [prompt, setPrompt] = useState("");
+  const searchParams = useSearchParams();
+  const [prompt, setPrompt] = useState(() => searchParams.get("prompt")?.slice(0, 8_000) ?? "");
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
