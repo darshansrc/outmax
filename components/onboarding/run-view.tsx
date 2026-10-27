@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { ArrowUpRight, Check, ChevronDown, ChevronUp, Copy, Globe, Mail, X } from "lucide-react";
 import { cn } from "cn";
 import { Button, Input, Textarea } from "@/components/brand/controls";
-import { ENGINE_LABELS, type DraftEmail, type Lead, type OnboardingRun } from "@/lib/onboarding";
+import { ENGINE_LABELS, type DraftEmail, type Lead, type OnboardingRun, type RunUsage, type TokenUsage } from "@/lib/onboarding";
 import { Favicon, Flag, LinkedInLogo } from "./icons";
 import { RecentSearches, idealCustomer } from "./setup";
 import { PanelLabel, Pill, Shell, Spinner, formatDate, hostname } from "./shell";
@@ -251,20 +251,48 @@ function Rejected({ rows }: { rows: NonNullable<OnboardingRun["progress"]>["reje
   );
 }
 
-function Costs({ costs, live }: { costs: NonNullable<OnboardingRun["costs"]>; live: boolean }) {
-  const rows = [
-    ["Exa search", costs.exaSearchDollars ? `$${costs.exaSearchDollars.toFixed(2)}` : null],
-    ["Exa agent", costs.exaAgentDollars ? `$${costs.exaAgentDollars.toFixed(2)}` : null],
-    ["Fiber", costs.fiberCredits ? `${Math.round(costs.fiberCredits * 100) / 100} credits` : null],
-  ].filter((row): row is [string, string] => !!row[1]);
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const dollars = (value: number) => `$${value < 0.1 && value > 0 ? value.toFixed(3) : value.toFixed(2)}`;
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+const joined = (...parts: (string | number | false)[]) => parts.filter(Boolean).join(" · ");
+
+function tokens(usage: TokenUsage | null) {
+  if (!usage?.modelCalls) return null;
+  return {
+    text: `${compact.format(usage.inputTokens)} in · ${compact.format(usage.outputTokens)} out`,
+    title: `${plural(usage.modelCalls, "call")}. ${usage.inputTokens.toLocaleString()} input tokens (${usage.cachedInputTokens.toLocaleString()} cached), ${usage.outputTokens.toLocaleString()} output tokens.`,
+  };
+}
+
+type UsageRow = { key: string; value: string; title?: string; strong?: boolean };
+
+function Usage({ usage, live }: { usage: RunUsage; live: boolean }) {
+  const search = tokens(usage.leadTokens);
+  const drafts = tokens(usage.draftTokens);
+  const rows = ([
+    usage.totalDollars !== null && { key: "Total", value: `${dollars(usage.totalDollars)} est.`, strong: true },
+    (usage.exaSearches > 0 || usage.exaSearchDollars > 0) && { key: "Exa search", value: joined(usage.exaSearches && plural(usage.exaSearches, "request"), dollars(usage.exaSearchDollars)) },
+    (usage.exaAgentRuns > 0 || usage.exaAgentDollars > 0) && { key: "Exa agent", value: joined(usage.exaAgentRuns && plural(usage.exaAgentRuns, "run"), dollars(usage.exaAgentDollars)) },
+    (usage.fiberLookups > 0 || usage.fiberCredits > 0) && { key: "Fiber", value: joined(usage.fiberLookups && plural(usage.fiberLookups, "lookup"), `${Math.round(usage.fiberCredits * 100) / 100} credits`) },
+    search && { key: "AI · search", value: search.text, title: search.title },
+    drafts && { key: "AI · drafts", value: drafts.text, title: drafts.title },
+  ] as (UsageRow | false | null)[]).filter((row): row is UsageRow => !!row);
   if (!rows.length) return null;
   return (
-    <p className="mt-3 text-[11px] leading-[18px] text-zinc-400" title="AI model usage isn’t included.">
-      {live ? "Cost so far: " : "Cost: "}
-      {rows.map(([label, value], index) => (
-        <span key={label}>{index > 0 && " · "}{label} <span className="font-mono text-zinc-500">{value}</span></span>
-      ))}
-    </p>
+    <div className="mt-4 border-t border-zinc-100 pt-4">
+      <PanelLabel>{live ? "Usage so far" : "Usage"}</PanelLabel>
+      <dl className="mt-2 space-y-2 text-[12px]">
+        {rows.map((row) => (
+          <div key={row.key} className="flex justify-between gap-3">
+            <dt className="shrink-0 text-zinc-500">{row.key}</dt>
+            <dd title={row.title} className={cn("truncate font-mono text-[11px] text-zinc-700", row.strong && "text-zinc-950")}>{row.value}</dd>
+          </div>
+        ))}
+      </dl>
+      {usage.totalDollars === null && (
+        <p className="mt-2 text-[11px] leading-4 text-zinc-400">No total. It needs token counts and model and Fiber prices.</p>
+      )}
+    </div>
   );
 }
 
@@ -297,7 +325,7 @@ function RunPanel({ run, runId }: { run: OnboardingRun; runId: string }) {
         </div>
         <div className="flex justify-between gap-3"><dt className="text-zinc-500">Engine</dt><dd className="font-medium text-zinc-800">{ENGINE_LABELS[run.engine]}</dd></div>
       </dl>
-      {run.costs && <Costs costs={run.costs} live={active(run.status)} />}
+      {run.usage && <Usage usage={run.usage} live={active(run.status)} />}
       <div className="mt-6 border-t border-zinc-100 pt-4"><RecentSearches activeRunId={runId} /></div>
     </div>
   );

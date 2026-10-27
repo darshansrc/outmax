@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { sizeLabel, type Business, type Profile } from "../onboarding";
-import { domainOf, excerpts, extract, grounded, normalizeUrl, research, textSeen, type SearchUsage } from "./search";
+import { domainOf, emptyUsage, excerpts, extract, grounded, normalizeUrl, research, textSeen, type SearchUsage } from "./search";
 
 const text = z.string().trim().min(1);
 const nullableText = z.string().trim().min(1).nullable();
@@ -56,8 +56,10 @@ const planSchema = z.object({
 });
 
 export async function planAngles(brief: Brief, { used, rejectionSummary, signal }: { used: string[]; rejectionSummary: string | null; signal?: AbortSignal }) {
+  const usage = emptyUsage();
   const plan = await extract({
     schema: planSchema,
+    usage,
     signal,
     maxOutputTokens: 2_000,
     instructions: [
@@ -70,7 +72,7 @@ export async function planAngles(brief: Brief, { used, rejectionSummary, signal 
     ],
     input: { ...buyerBrief(brief), usedAngles: used, rejectionSummary },
   });
-  return plan.angles;
+  return { angles: plan.angles, usage };
 }
 
 /* Scout: one angle in, a short list of candidate companies out. */
@@ -101,6 +103,7 @@ export async function scout(brief: Brief, angle: { label: string; query: string 
   });
   const output = await extract({
     schema: scoutSchema,
+    usage: found.usage,
     signal,
     instructions: [
       "Turn the research brief into a candidate list. Only include companies that appear in the excerpts.",
@@ -168,6 +171,7 @@ export async function verify(brief: Brief, candidate: Candidate, signal?: AbortS
   });
   const output = await extract({
     schema: verdictSchema,
+    usage: found.usage,
     signal,
     instructions: [
       "Decide whether this company is a good prospect for the seller.",
@@ -253,6 +257,7 @@ export async function findContact(brief: Brief, company: { companyName: string; 
   });
   const output = await extract({
     schema: contactSchema,
+    usage: found.usage,
     signal,
     maxOutputTokens: 1_000,
     instructions: [

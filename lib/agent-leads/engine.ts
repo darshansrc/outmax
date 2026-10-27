@@ -47,7 +47,11 @@ export type Prospect = {
   contactSourceUrls: string[];
 };
 
-export type Costs = { searches: number; searchDollars: number; agentRuns: number; agentDollars: number; fiberLookups: number; fiberCredits: number };
+export type Costs = {
+  searches: number; searchDollars: number;
+  modelCalls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number;
+  agentRuns: number; agentDollars: number; fiberLookups: number; fiberCredits: number;
+};
 
 export type AgentState = {
   status: "running" | "completed" | "failed";
@@ -82,7 +86,7 @@ export function initialState(startedAt: string, target: number): AgentState {
     checked: 0,
     accepted: [],
     rejected: [],
-    costs: { searches: 0, searchDollars: 0, agentRuns: 0, agentDollars: 0, fiberLookups: 0, fiberCredits: 0 },
+    costs: { searches: 0, searchDollars: 0, modelCalls: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, agentRuns: 0, agentDollars: 0, fiberLookups: 0, fiberCredits: 0 },
     failures: 0,
     shortfallReason: null,
     error: null,
@@ -174,6 +178,9 @@ class Round {
   private addUsage(usage: SearchUsage) {
     this.state.costs.searches += usage.searches;
     this.state.costs.searchDollars += usage.exaDollars;
+    for (const key of ["modelCalls", "inputTokens", "cachedInputTokens", "outputTokens"] as const) {
+      this.state.costs[key] = (this.state.costs[key] ?? 0) + usage[key];
+    }
   }
 
   private spawn(work: Promise<unknown>) {
@@ -187,7 +194,8 @@ class Round {
     await this.save();
     try {
       const recent = state.rejected.slice(-15).map((item) => `${item.companyName}: ${item.reason}`).join("\n") || null;
-      const angles = await planAngles(this.brief, { used: state.angles.map((angle) => angle.query), rejectionSummary: recent, signal: AbortSignal.timeout(CALL_MS) });
+      const { angles, usage } = await planAngles(this.brief, { used: state.angles.map((angle) => angle.query), rejectionSummary: recent, signal: AbortSignal.timeout(CALL_MS) });
+      this.addUsage(usage);
       state.angles.push(...angles.map((angle) => ({ ...angle, done: false })));
     } finally {
       state.plans++;

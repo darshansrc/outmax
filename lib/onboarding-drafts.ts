@@ -1,6 +1,6 @@
 import { generateText, Output } from "ai";
 import { model } from "./provider";
-import { DRAFT_DAYS, draftsOutputSchema, type DraftEmail, type Lead } from "./onboarding";
+import { DRAFT_DAYS, draftsOutputSchema, type DraftEmail, type Lead, type TokenUsage } from "./onboarding";
 import type { OnboardingContext } from "./onboarding-store";
 
 const rules = [
@@ -28,10 +28,15 @@ export async function writeDrafts(context: OnboardingContext, leads: Lead[]) {
   const batches = Array.from({ length: Math.ceil(leads.length / BATCH) }, (_, index) => index * BATCH);
   const results = await Promise.all(batches.map((start) => writeBatch(context, leads.slice(start, start + BATCH))));
   const sequences: Record<number, DraftEmail[]> = {};
+  const usage: TokenUsage = { modelCalls: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   results.forEach((batch, index) => {
-    for (const [leadIndex, emails] of Object.entries(batch)) sequences[batches[index] + Number(leadIndex)] = emails;
+    for (const [leadIndex, emails] of Object.entries(batch.sequences)) sequences[batches[index] + Number(leadIndex)] = emails;
+    usage.modelCalls++;
+    usage.inputTokens += batch.tokens.inputTokens ?? 0;
+    usage.cachedInputTokens += batch.tokens.inputTokenDetails?.cacheReadTokens ?? 0;
+    usage.outputTokens += batch.tokens.outputTokens ?? 0;
   });
-  return sequences;
+  return { sequences, usage };
 }
 
 async function writeBatch(context: OnboardingContext, leads: Lead[]) {
@@ -67,5 +72,5 @@ async function writeBatch(context: OnboardingContext, leads: Lead[]) {
       sequences[sequence.leadIndex] = [...sequence.emails].sort((a, b) => a.day - b.day);
     }
   }
-  return sequences;
+  return { sequences, tokens: generated.totalUsage };
 }

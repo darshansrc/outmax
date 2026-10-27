@@ -1,4 +1,4 @@
-import { generateText, isStepCount, Output, pruneMessages, type ModelMessage } from "ai";
+import { generateText, isStepCount, Output, pruneMessages, type LanguageModelUsage, type ModelMessage } from "ai";
 import type { z } from "zod";
 import { model } from "../provider";
 import { createSearchTools, SEARCH_TOOL_NAMES, type SearchRow } from "../web-search";
@@ -8,7 +8,22 @@ const MAX_PROMPT_CHARACTERS = 240_000;
 const MAX_EXCERPT_CHARACTERS = 60_000;
 const MAX_SOURCE_CHARACTERS = 3_000;
 
-export type SearchUsage = { searches: number; exaDollars: number };
+export type SearchUsage = {
+  searches: number; exaDollars: number;
+  modelCalls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number;
+};
+
+export function emptyUsage(): SearchUsage {
+  return { searches: 0, exaDollars: 0, modelCalls: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+}
+
+/** Adds one generateText result's token usage. */
+export function addTokens(usage: SearchUsage, tokens: LanguageModelUsage) {
+  usage.modelCalls++;
+  usage.inputTokens += tokens.inputTokens ?? 0;
+  usage.cachedInputTokens += tokens.inputTokenDetails?.cacheReadTokens ?? 0;
+  usage.outputTokens += tokens.outputTokens ?? 0;
+}
 export type Sources = Map<string, string>;
 
 export function normalizeUrl(url: string) {
@@ -64,7 +79,7 @@ export async function research({ instructions, prompt, maxSteps, numResults = 8,
   instructions: string[]; prompt: unknown; maxSteps: number; numResults?: number; domain?: string; signal?: AbortSignal;
 }) {
   const sources: Sources = new Map();
-  const usage: SearchUsage = { searches: 0, exaDollars: 0 };
+  const usage = emptyUsage();
 
   const result = await generateText({
     model,
@@ -103,6 +118,7 @@ export async function research({ instructions, prompt, maxSteps, numResults = 8,
     },
   });
 
+  addTokens(usage, result.totalUsage);
   return { brief: result.text.slice(0, 16_000), sources, usage };
 }
 
@@ -119,8 +135,8 @@ export function excerpts(sources: Sources, limit = MAX_EXCERPT_CHARACTERS) {
 }
 
 /** Turns a research brief and its excerpts into structured output, with no tools. */
-export async function extract<T extends z.ZodType>({ schema, instructions, input, signal, maxOutputTokens = 4_000 }: {
-  schema: T; instructions: string[]; input: Record<string, unknown>; signal?: AbortSignal; maxOutputTokens?: number;
+export async function extract<T extends z.ZodType>({ schema, instructions, input, usage, signal, maxOutputTokens = 4_000 }: {
+  schema: T; instructions: string[]; input: Record<string, unknown>; usage: SearchUsage; signal?: AbortSignal; maxOutputTokens?: number;
 }): Promise<z.infer<T>> {
   const prompt = JSON.stringify(input);
   if (prompt.length > MAX_PROMPT_CHARACTERS) throw new Error(`Extraction prompt too large (${prompt.length} characters).`);
@@ -137,5 +153,6 @@ export async function extract<T extends z.ZodType>({ schema, instructions, input
     ].join("\n"),
     prompt,
   });
+  addTokens(usage, result.totalUsage);
   return result.output as z.infer<T>;
 }

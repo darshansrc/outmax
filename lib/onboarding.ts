@@ -68,10 +68,27 @@ export type StartRun = z.infer<typeof startRunSchema>;
 export type DraftEmail = z.infer<typeof draftEmailSchema>;
 export type Lead = z.infer<typeof leadSchema>;
 
+export type TokenUsage = { modelCalls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number };
+
 export type DraftState =
   | { status: "pending"; startedAt: number }
-  | { status: "ready"; sequences: Record<number, DraftEmail[]> }
+  | { status: "ready"; sequences: Record<number, DraftEmail[]>; usage?: TokenUsage }
   | { status: "failed"; error: string };
+
+/** What one search used, by provider. Counts are exact; dollars only where the provider reports them. */
+export type RunUsage = {
+  exaSearches: number;
+  exaSearchDollars: number;
+  exaAgentRuns: number;
+  exaAgentDollars: number;
+  fiberLookups: number;
+  fiberCredits: number;
+  /** Model tokens used finding leads. Null when the engine doesn't report them. */
+  leadTokens: TokenUsage | null;
+  draftTokens: TokenUsage | null;
+  /** Estimated total in dollars, only when every price it needs is configured. */
+  totalDollars: number | null;
+};
 
 export type OnboardingRun = {
   runId: string;
@@ -87,8 +104,7 @@ export type OnboardingRun = {
   drafts: DraftState | null;
   engine: Engine;
   leadCount: number;
-  /** Spend so far by provider. Model inference is not included. */
-  costs: { exaSearchDollars: number; exaAgentDollars: number; fiberCredits: number } | null;
+  usage: RunUsage | null;
   progress: {
     stage: string;
     checked: number;

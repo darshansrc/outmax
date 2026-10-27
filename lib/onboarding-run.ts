@@ -1,12 +1,13 @@
 import { after } from "next/server";
 import Exa from "exa-js";
-import { advanceAgentRun, toLead } from "./agent-leads/engine";
+import { advanceAgentRun, toLead, type AgentState } from "./agent-leads/engine";
 import { costOf } from "./agent-leads/fiber";
 import { isActive, leadResult, RouteError } from "./lead-runs";
 import type { Lead } from "./leads";
-import type { OnboardingRun } from "./onboarding";
+import type { DraftState, OnboardingRun } from "./onboarding";
 import { writeDrafts } from "./onboarding-drafts";
 import { OnboardingStore, type OnboardingContext } from "./onboarding-store";
+import { runUsage } from "./run-usage";
 
 const DRAFT_TIMEOUT_MS = 300_000;
 
@@ -16,8 +17,8 @@ const json = (body: unknown, status = 200) =>
 function scheduleDrafts(store: OnboardingStore, runId: string, work: () => ReturnType<typeof writeDrafts>) {
   after(async () => {
     try {
-      const sequences = await work();
-      await store.saveDrafts(runId, { status: "ready", sequences });
+      const { sequences, usage } = await work();
+      await store.saveDrafts(runId, { status: "ready", sequences, usage });
     } catch (error) {
       console.error(JSON.stringify({ route: "onboarding/drafts", runId, errorType: error instanceof Error ? error.name : "UnknownError" }));
       await store.saveDrafts(runId, { status: "failed", error: "We couldn’t write the drafts. Try again." }).catch(() => {});
@@ -55,9 +56,27 @@ function baseRun(runId: string, context: OnboardingContext): OnboardingRun {
     engine: context.engine === "outmax" ? "outmax" : "exa",
     // Searches started before the lead count option always asked for 20.
     leadCount: context.leadCount ?? 20,
-    costs: null,
+    usage: null,
     progress: null,
   };
+}
+
+function agentUsage(state: AgentState, drafts: DraftState | null) {
+  // Runs saved before the cost breakdown kept Exa totals under `exa`; later ones may lack token counts.
+  const legacy = (state as { exa?: { searchDollars: number; fiberDollars: number } }).exa;
+  const costs: Partial<AgentState["costs"]> = state.costs ?? {};
+  const tracked = costs.modelCalls !== undefined;
+  return runUsage({
+    exaSearches: costs.searches ?? 0,
+    exaSearchDollars: costs.searchDollars ?? legacy?.searchDollars ?? 0,
+    exaAgentRuns: costs.agentRuns ?? 0,
+    exaAgentDollars: costs.agentDollars ?? legacy?.fiberDollars ?? 0,
+    fiberLookups: costs.fiberLookups ?? 0,
+    fiberCredits: costs.fiberCredits ?? 0,
+    leadTokens: tracked
+      ? { modelCalls: costs.modelCalls ?? 0, inputTokens: costs.inputTokens ?? 0, cachedInputTokens: costs.cachedInputTokens ?? 0, outputTokens: costs.outputTokens ?? 0 }
+      : null,
+  }, drafts, tracked);
 }
 
 async function readAgentRun(store: OnboardingStore, runId: string, context: OnboardingContext, retryDrafts: boolean) {
@@ -68,16 +87,12 @@ async function readAgentRun(store: OnboardingStore, runId: string, context: Onbo
   const body = baseRun(runId, context);
   body.status = state.status;
   body.completedAt = state.completedAt;
-  // Runs saved before the cost breakdown kept Exa totals under `exa`.
-  const legacy = (state as { exa?: { searchDollars: number; fiberDollars: number } }).exa;
-  body.costs = state.costs
-    ? { exaSearchDollars: state.costs.searchDollars, exaAgentDollars: state.costs.agentDollars, fiberCredits: state.costs.fiberCredits }
-    : { exaSearchDollars: legacy?.searchDollars ?? 0, exaAgentDollars: legacy?.fiberDollars ?? 0, fiberCredits: 0 };
   body.progress = { stage: state.stage, checked: state.checked, accepted: state.accepted.length, rejected: state.rejected };
   body.leads = state.accepted.map(toLead);
   body.shortfallReason = state.shortfallReason;
   if (state.status === "failed") body.error = state.error ?? "The search stopped before finishing.";
   if (state.status === "completed" && body.leads.length) await withDrafts(store, context, body, body.leads, retryDrafts);
+  body.usage = agentUsage(state, body.drafts);
   return json(body);
 }
 
@@ -100,7 +115,13 @@ export async function readOnboardingRun(runId: string, { retryDrafts = false } =
     body.status = run.status;
     body.createdAt = run.createdAt ?? context.createdAt;
     body.completedAt = run.completedAt ?? null;
-    body.costs = run.costDollars?.total === undefined ? null : { exaSearchDollars: 0, exaAgentDollars: costOf(run), fiberCredits: 0 };
+    const usage = () => runUsage({
+      exaSearches: 0, exaSearchDollars: 0,
+      exaAgentRuns: 1, exaAgentDollars: costOf(run),
+      fiberLookups: 0, fiberCredits: 0,
+      leadTokens: null,
+    }, body.drafts, run.costDollars?.total !== undefined);
+    body.usage = usage();
 
     if (run.status !== "completed") {
       if (!isActive(run)) body.error = `The search stopped before finishing (${run.stopReason ?? run.status}).`;
@@ -111,6 +132,7 @@ export async function readOnboardingRun(runId: string, { retryDrafts = false } =
     body.leads = result.leads;
     body.shortfallReason = result.shortfallReason;
     if (result.leads.length) await withDrafts(store, context, body, result.leads, retryDrafts);
+    body.usage = usage();
     return json(body);
   } catch (error) {
     const httpStatus = error instanceof RouteError ? error.httpStatus : 502;
