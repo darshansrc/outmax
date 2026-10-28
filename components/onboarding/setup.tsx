@@ -362,7 +362,7 @@ function Section({ title, description, children }: { title: string; description:
 
 const leadCounts = [5, 10, 15, 20, 25, 30, 40, 50].filter((count) => count >= LEAD_COUNT.min && count <= LEAD_COUNT.max);
 
-function LeadCount({ value, onChange, ...props }: { id: string; value: number; onChange: (value: number) => void; "aria-label"?: string }) {
+export function LeadCount({ value, onChange, max = LEAD_COUNT.max, prefix = "", ...props }: { id: string; value: number; onChange: (value: number) => void; max?: number; prefix?: string; "aria-label"?: string }) {
   return (
     <div className="relative">
       <select
@@ -371,7 +371,7 @@ function LeadCount({ value, onChange, ...props }: { id: string; value: number; o
         onChange={(event) => onChange(Number(event.target.value))}
         className="h-8 appearance-none rounded-lg border border-zinc-300 bg-white pr-7 pl-2.5 text-[13px] font-medium text-zinc-950 outline-none hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2"
       >
-        {leadCounts.map((count) => <option key={count} value={count}>{count}</option>)}
+        {leadCounts.filter((count) => count <= max).map((count) => <option key={count} value={count}>{prefix}{count}</option>)}
       </select>
       <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2 text-zinc-500" />
     </div>

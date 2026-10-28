@@ -1,7 +1,10 @@
 import type { Lead } from "../leads";
+import { MAX_SEARCH_LEADS, type DraftEmail, type DraftState, type TokenUsage } from "../onboarding";
+import { writeLeadDrafts, type DraftSender } from "../onboarding-drafts";
 import type { OnboardingContext } from "../onboarding-store";
 import { OnboardingStore } from "../onboarding-store";
 import { costOf, emailFromName, fiberConfigured, readAgentLookup, revealFromLinkedIn, startAgentLookup, type FiberEmail } from "./fiber";
+import { fetchCompanyPages } from "../web-search";
 import { agentLog, short, withRunLog } from "./log";
 import { domainOf, type SearchUsage } from "./search";
 import { findContact, planAngles, scout, verify, type Brief, type Candidate, type WebContact } from "./subagents";
@@ -27,6 +30,10 @@ const OVERSHOOT = 3;
 const ROUND_MS = 120_000;
 const CALL_MS = 100_000;
 const FIBER_MS = 60_000;
+/** Drafts are written in small batches as leads become ready, a few batches at a time. */
+const DRAFT_BATCH = 5;
+const DRAFTERS = 3;
+const DRAFT_MS = 100_000;
 
 export type Prospect = {
   domain: string;
@@ -46,12 +53,16 @@ export type Prospect = {
   linkedInUrl: string | null;
   contactSources: ("web" | "fiber" | "exa")[];
   contactSourceUrls: string[];
+  /** Missing on searches from before drafts were written per lead. */
+  draftStatus?: "pending" | "writing" | "ready" | "failed";
+  drafts?: DraftEmail[];
 };
 
 export type Costs = {
   searches: number; searchDollars: number;
   modelCalls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number;
   agentRuns: number; agentDollars: number; fiberLookups: number; fiberCredits: number;
+  draftTokens?: TokenUsage;
 };
 
 export type AgentState = {
@@ -61,6 +72,8 @@ export type AgentState = {
   startedAt: string;
   completedAt: string | null;
   plans: number;
+  /** Absolute caps after "find more"; otherwise derived from the target. */
+  budget?: { checks: number; plans: number };
   angles: { label: string; query: string; done: boolean }[];
   seen: string[];
   queue: Candidate[];
@@ -127,7 +140,10 @@ class Round {
   private scouting = 0;
   private verifying = 0;
   private contacting = 0;
+  private drafting = 0;
   private planning = false;
+  /** Set once no more leads can arrive this round, so the drafter can finish. */
+  private searchDone = false;
   private readonly claimed = new Set<string>();
   private readonly background = new Set<Promise<unknown>>();
   private saving: Promise<void> = Promise.resolve();
@@ -136,6 +152,7 @@ class Round {
     private readonly store: OnboardingStore,
     private readonly runId: string,
     private readonly brief: Brief,
+    private readonly sender: DraftSender,
     readonly state: AgentState,
   ) {}
 
@@ -151,10 +168,18 @@ class Round {
     return this.target - this.state.accepted.length;
   }
 
+  private get maxChecked() {
+    return this.state.budget?.checks ?? maxChecked(this.target);
+  }
+
+  private get maxPlans() {
+    return this.state.budget?.plans ?? maxPlans(this.target);
+  }
+
   private get exhausted() {
     const { state } = this;
-    return state.checked >= maxChecked(this.target) || (!state.queue.length && !this.scouting && !this.planning
-      && state.angles.every((angle) => angle.done) && state.plans >= maxPlans(this.target));
+    return state.checked >= this.maxChecked || (!state.queue.length && !this.scouting && !this.planning
+      && state.angles.every((angle) => angle.done) && state.plans >= this.maxPlans);
   }
 
   private get skip() {
@@ -170,6 +195,7 @@ class Round {
       this.scouting && `Searching ${plural(this.scouting, "angle", "angles")}`,
       this.verifying && `Checking ${plural(this.verifying, "company", "companies")}`,
       this.contacting && `Finding ${plural(this.contacting, "email", "emails")}`,
+      this.drafting && "Writing emails",
       waiting && `Waiting on ${plural(waiting, "Exa lookup", "Exa lookups")}`,
     ].filter(Boolean).join(" · ") || state.stage;
     this.saving = this.saving.then(() => this.store.saveAgent(this.runId, state)).catch(() => {});
@@ -239,15 +265,15 @@ class Round {
   /** Keeps the queue full: scouts several angles at once and plans more when they run out. */
   private async feed() {
     const { state } = this;
-    while (this.open && this.needed > 0 && state.checked < maxChecked(this.target)) {
+    while (this.open && this.needed > 0 && state.checked < this.maxChecked) {
       if (state.queue.length < WORKERS * 2) {
         const angles = state.angles.filter((angle) => !angle.done).slice(0, Math.max(0, SCOUTS - this.scouting));
         if (angles.length) {
           for (const angle of angles) this.spawn(this.scoutAngle(angle));
         } else if (!this.scouting && !state.queue.length) {
-          if (state.plans >= maxPlans(this.target)) return;
+          if (state.plans >= this.maxPlans) return;
           await this.plan().catch((error) => {
-            if (state.plans >= maxPlans(this.target)) throw error;
+            if (state.plans >= this.maxPlans) throw error;
           });
           continue;
         }
@@ -268,15 +294,30 @@ class Round {
     });
   }
 
+  /** The company's own pages, fetched once and shared by the fit check and the contact search. */
+  private async companyPages(candidate: Candidate) {
+    try {
+      const { pages, dollars } = await fetchCompanyPages(candidate.website, { signal: AbortSignal.timeout(CALL_MS) });
+      this.state.costs.searches++;
+      this.state.costs.searchDollars += dollars;
+      agentLog(`pages ${candidate.domain} · fetched`, { pages: pages.map((page) => page.url), dollars });
+      return pages;
+    } catch (error) {
+      agentLog(`pages ${candidate.domain} · failed`, { error: error instanceof Error ? short(error.message, 200) : "Unknown error" });
+      return undefined;
+    }
+  }
+
   /** Verifies a company and, in parallel, looks for its decision-maker on the web. */
   private async check(candidate: Candidate) {
     const { state } = this;
     this.verifying++;
     await this.save();
     agentLog(`check ${candidate.domain} · start`, { company: candidate.companyName, why: short(candidate.reason, 160) });
+    const pages = await this.companyPages(candidate);
     const [verdict, web] = await Promise.allSettled([
-      verify(this.brief, candidate, AbortSignal.timeout(CALL_MS)),
-      findContact(this.brief, candidate, AbortSignal.timeout(CALL_MS)),
+      verify(this.brief, candidate, AbortSignal.timeout(CALL_MS), pages),
+      findContact(this.brief, candidate, AbortSignal.timeout(CALL_MS), pages),
     ]);
     this.verifying--;
     state.checked++;
@@ -424,6 +465,63 @@ class Round {
     }));
   }
 
+  private draftable() {
+    return this.state.accepted.filter((item) => item.contact === "done" && (item.draftStatus ?? "pending") === "pending");
+  }
+
+  private async writeDrafts(batch: Prospect[]) {
+    const { state } = this;
+    agentLog(`drafts · writing ${batch.length}`, { leads: batch.map((item) => item.domain) });
+    try {
+      const { sequences, tokens } = await writeLeadDrafts(this.sender, batch.map(toLead), { timeoutMs: DRAFT_MS });
+      batch.forEach((item, index) => {
+        item.drafts = sequences[index] ?? [];
+        item.draftStatus = item.drafts.length ? "ready" : "failed";
+      });
+      const usage = state.costs.draftTokens ?? { modelCalls: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+      usage.modelCalls++;
+      usage.inputTokens += tokens.inputTokens ?? 0;
+      usage.cachedInputTokens += tokens.inputTokenDetails?.cacheReadTokens ?? 0;
+      usage.outputTokens += tokens.outputTokens ?? 0;
+      state.costs.draftTokens = usage;
+      agentLog(`drafts · done ${batch.length}`, { failed: batch.filter((item) => item.draftStatus === "failed").map((item) => item.domain) });
+    } catch (error) {
+      for (const item of batch) item.draftStatus = "failed";
+      agentLog("drafts · failed", { leads: batch.map((item) => item.domain), error: error instanceof Error ? short(error.message, 200) : "Unknown error" });
+    }
+    await this.save();
+  }
+
+  /** Writes drafts for leads as soon as their contact lookup finishes. */
+  private async drafter() {
+    while (Date.now() < this.deadline && this.state.status !== "failed") {
+      const batch = this.drafting < DRAFTERS ? this.draftable().slice(0, DRAFT_BATCH) : [];
+      if (batch.length) {
+        for (const item of batch) item.draftStatus = "writing";
+        this.drafting++;
+        this.spawn(this.writeDrafts(batch).finally(() => { this.drafting--; }));
+        continue;
+      }
+      if (this.searchDone && !this.drafting && !this.draftable().length) return;
+      await sleep(3_000);
+    }
+  }
+
+  private resetDrafts(statuses: Prospect["draftStatus"][]) {
+    for (const item of this.state.accepted) {
+      if (statuses.includes(item.draftStatus)) item.draftStatus = "pending";
+    }
+  }
+
+  /** Writes any missing drafts without searching. Used to retry failed drafts on a finished search. */
+  async draftsOnly(retryFailed: boolean) {
+    this.resetDrafts(retryFailed ? ["writing", "failed"] : ["writing"]);
+    this.searchDone = true;
+    await this.drafter();
+    await Promise.allSettled(this.background);
+    await this.save();
+  }
+
   private async worker() {
     const { state } = this;
     while (this.open) {
@@ -435,7 +533,7 @@ class Round {
         continue;
       }
       const room = state.accepted.length + this.verifying < this.target + OVERSHOOT
-        && state.checked + this.verifying < maxChecked(this.target);
+        && state.checked + this.verifying < this.maxChecked;
       if (this.needed > 0 && room && state.queue.length) {
         await this.check(state.queue.shift()!);
         continue;
@@ -449,8 +547,10 @@ class Round {
   async run() {
     const { state } = this;
     agentLog("round · start", { target: this.target, accepted: state.accepted.length, checked: state.checked, queue: state.queue.length, angles: state.angles.length });
+    this.resetDrafts(["writing"]);
+    const drafting = this.drafter();
     await this.pollAgents();
-    if (!state.angles.length && state.plans < maxPlans(this.target)) await this.plan();
+    if (!state.angles.length && state.plans < this.maxPlans) await this.plan();
     await Promise.all([this.feed(), ...Array.from({ length: WORKERS }, () => this.worker())]);
     await Promise.allSettled(this.background);
 
@@ -459,7 +559,10 @@ class Round {
       await sleep(5_000);
       await this.pollAgents();
     }
-    const unfinished = state.accepted.some((item) => item.contact !== "done");
+    this.searchDone = true;
+    await drafting;
+    await Promise.allSettled(this.background);
+    const unfinished = state.accepted.some((item) => item.contact !== "done" || !["ready", "failed"].includes(item.draftStatus ?? "pending"));
     if (!unfinished && (this.needed <= 0 || this.exhausted)) {
       state.status = "completed";
       state.completedAt = new Date().toISOString();
@@ -485,7 +588,7 @@ export async function advanceAgentRun(runId: string, context: OnboardingContext)
   try {
     const state = await store.getAgent(runId);
     if (!state || state.status !== "running") return;
-    const round = new Round(store, runId, { website: context.website, business: context.business, profile: context.profile }, state);
+    const round = new Round(store, runId, briefOf(context), context, state);
     try {
       await withRunLog(runId, () => round.run());
       state.failures = 0;
@@ -499,6 +602,78 @@ export async function advanceAgentRun(runId: string, context: OnboardingContext)
       }
     }
     await round.save();
+  } finally {
+    await store.releaseAgent(runId).catch(() => {});
+  }
+}
+
+const briefOf = (context: OnboardingContext): Brief => ({ website: context.website, business: context.business, profile: context.profile });
+
+/** Drafts for the run view: finished sequences, plus which leads are still being written or failed. */
+export function agentDrafts(state: AgentState): DraftState {
+  const sequences: Record<number, DraftEmail[]> = {};
+  const pending: number[] = [];
+  const failed: number[] = [];
+  state.accepted.forEach((item, index) => {
+    if (item.draftStatus === "ready" && item.drafts?.length) sequences[index] = item.drafts;
+    else if (item.draftStatus === "failed") failed.push(index);
+    else pending.push(index);
+  });
+  return { status: "ready", sequences, usage: state.costs.draftTokens, pending, failed };
+}
+
+/** True when this search writes drafts per lead. Older finished searches wrote them all at the end. */
+export function draftsPerLead(state: AgentState) {
+  return state.status === "running" || state.accepted.some((item) => item.draftStatus !== undefined);
+}
+
+export class SearchBusyError extends Error {}
+
+/**
+ * Continues a finished search until it has `more` additional leads. Companies already checked
+ * are never checked again, and new leads get drafts as they arrive.
+ */
+export async function extendAgentRun(runId: string, more: number) {
+  const store = new OnboardingStore();
+  if (!await store.claimAgent(runId)) throw new SearchBusyError("This search is still finishing. Try again in a moment.");
+  try {
+    const state = await store.getAgent(runId);
+    if (!state) return null;
+    if (state.status !== "completed") throw new SearchBusyError("This search is still running.");
+    if (!draftsPerLead(state)) {
+      const legacy = await store.getDrafts(runId);
+      if (legacy?.status === "ready") state.costs.draftTokens ??= legacy.usage;
+      state.accepted.forEach((item, index) => {
+        const sequence = legacy?.status === "ready" ? legacy.sequences[index] : undefined;
+        item.drafts = sequence ?? [];
+        item.draftStatus = sequence?.length ? "ready" : "pending";
+      });
+    }
+    state.target = Math.min(MAX_SEARCH_LEADS, state.accepted.length + more);
+    const added = state.target - state.accepted.length;
+    state.budget = { checks: state.checked + maxChecked(added), plans: state.plans + maxPlans(added) };
+    state.status = "running";
+    state.completedAt = null;
+    state.shortfallReason = null;
+    state.failures = 0;
+    state.stage = "Finding more leads";
+    await store.saveAgent(runId, state);
+    agentLog(`search ${runId.slice(-8)} · find more`, { more, target: state.target });
+    return state;
+  } finally {
+    await store.releaseAgent(runId).catch(() => {});
+  }
+}
+
+/** Finishes drafts on a finished search, optionally retrying failed ones. */
+export async function finishAgentDrafts(runId: string, context: OnboardingContext, { retryFailed = false } = {}) {
+  const store = new OnboardingStore();
+  if (!await store.claimAgent(runId)) return;
+  try {
+    const state = await store.getAgent(runId);
+    if (!state || state.status !== "completed") return;
+    const round = new Round(store, runId, briefOf(context), context, state);
+    await withRunLog(runId, () => round.draftsOnly(retryFailed));
   } finally {
     await store.releaseAgent(runId).catch(() => {});
   }

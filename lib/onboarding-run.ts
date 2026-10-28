@@ -1,10 +1,10 @@
 import { after } from "next/server";
 import Exa from "exa-js";
-import { advanceAgentRun, toLead, type AgentState } from "./agent-leads/engine";
+import { advanceAgentRun, agentDrafts, draftsPerLead, extendAgentRun, finishAgentDrafts, SearchBusyError, toLead, type AgentState } from "./agent-leads/engine";
 import { costOf } from "./agent-leads/fiber";
 import { isActive, leadResult, RouteError } from "./lead-runs";
 import type { Lead } from "./leads";
-import type { DraftState, OnboardingRun } from "./onboarding";
+import { LEAD_COUNT, MAX_SEARCH_LEADS, type DraftState, type OnboardingRun } from "./onboarding";
 import { writeDrafts } from "./onboarding-drafts";
 import { OnboardingStore, type OnboardingContext } from "./onboarding-store";
 import { runUsage } from "./run-usage";
@@ -87,11 +87,26 @@ async function readAgentRun(store: OnboardingStore, runId: string, context: Onbo
   const body = baseRun(runId, context);
   body.status = state.status;
   body.completedAt = state.completedAt;
+  body.leadCount = state.target ?? body.leadCount;
   body.progress = { stage: state.stage, checked: state.checked, accepted: state.accepted.length, rejected: state.rejected };
   body.leads = state.accepted.map(toLead);
   body.shortfallReason = state.shortfallReason;
   if (state.status === "failed") body.error = state.error ?? "The search stopped before finishing.";
-  if (state.status === "completed" && body.leads.length) await withDrafts(store, context, body, body.leads, retryDrafts);
+  if (draftsPerLead(state)) {
+    const drafts = agentDrafts(state);
+    if (drafts.status === "ready" && state.status === "completed") {
+      const retry = retryDrafts && !!drafts.failed?.length;
+      // Drafts left unfinished by an interrupted request get picked up here; the agent lock stops duplicates.
+      if (retry || drafts.pending?.length) after(() => finishAgentDrafts(runId, context, { retryFailed: retry }));
+      if (retry) {
+        drafts.pending = [...drafts.pending ?? [], ...drafts.failed ?? []].sort((a, b) => a - b);
+        drafts.failed = [];
+      }
+    }
+    body.drafts = drafts;
+  } else if (state.status === "completed" && body.leads.length) {
+    await withDrafts(store, context, body, body.leads, retryDrafts);
+  }
   body.usage = agentUsage(state, body.drafts);
   return json(body);
 }
@@ -138,6 +153,34 @@ export async function readOnboardingRun(runId: string, { retryDrafts = false } =
     const httpStatus = error instanceof RouteError ? error.httpStatus : 502;
     const message = error instanceof RouteError ? error.message : "We couldn’t load this search. Please try again.";
     if (httpStatus >= 500) console.error(JSON.stringify({ route: "onboarding/run", runId, httpStatus, errorType: error instanceof Error ? error.name : "UnknownError" }));
+    return json({ error: message }, httpStatus);
+  }
+}
+
+/** Adds `count` more leads to a finished Outmax search, keeping its leads, drafts and checked companies. */
+export async function findMoreLeads(runId: string, count: unknown) {
+  try {
+    if (!/^[\w-]{1,200}$/.test(runId)) throw new RouteError("Search not found.", 404);
+    if (!Number.isInteger(count) || (count as number) < LEAD_COUNT.min || (count as number) > LEAD_COUNT.max) {
+      throw new RouteError(`Pick between ${LEAD_COUNT.min} and ${LEAD_COUNT.max} more leads.`, 400);
+    }
+    const store = new OnboardingStore();
+    const context = await store.getContext(runId);
+    if (!context) throw new RouteError("This search has expired or doesn’t exist.", 404);
+    if (context.engine !== "outmax") throw new RouteError("This search can’t be extended.", 400);
+    const current = await store.getAgent(runId);
+    if (current && current.accepted.length >= MAX_SEARCH_LEADS) {
+      throw new RouteError(`A search can have up to ${MAX_SEARCH_LEADS} leads.`, 400);
+    }
+    const state = await extendAgentRun(runId, count as number).catch((error) => {
+      throw error instanceof SearchBusyError ? new RouteError(error.message, 409) : error;
+    });
+    if (!state) throw new RouteError("This search has expired or doesn’t exist.", 404);
+    return await readAgentRun(store, runId, context, false);
+  } catch (error) {
+    const httpStatus = error instanceof RouteError ? error.httpStatus : 502;
+    const message = error instanceof RouteError ? error.message : "We couldn’t find more leads. Please try again.";
+    if (httpStatus >= 500) console.error(JSON.stringify({ route: "onboarding/more", runId, httpStatus, errorType: error instanceof Error ? error.name : "UnknownError" }));
     return json({ error: message }, httpStatus);
   }
 }

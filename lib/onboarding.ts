@@ -11,6 +11,8 @@ export type Engine = (typeof ENGINES)[number];
 export const ENGINE_LABELS: Record<Engine, string> = { outmax: "Outmax agent", exa: "Exa agent" };
 
 export const LEAD_COUNT = { min: 5, max: MAX_LEADS, default: 10 } as const;
+/** Most leads one search can grow to with "find more". */
+export const MAX_SEARCH_LEADS = 100;
 
 export const businessSchema = z.object({
   name: text,
@@ -72,7 +74,15 @@ export type TokenUsage = { modelCalls: number; inputTokens: number; cachedInputT
 
 export type DraftState =
   | { status: "pending"; startedAt: number }
-  | { status: "ready"; sequences: Record<number, DraftEmail[]>; usage?: TokenUsage }
+  | {
+    status: "ready";
+    sequences: Record<number, DraftEmail[]>;
+    usage?: TokenUsage;
+    /** Lead indexes whose drafts are still being written, when drafts are written as leads arrive. */
+    pending?: number[];
+    /** Lead indexes whose drafts couldn't be written. */
+    failed?: number[];
+  }
   | { status: "failed"; error: string };
 
 /** What one search used, by provider. Counts are exact; dollars only where the provider reports them. */

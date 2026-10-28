@@ -26,7 +26,7 @@ const BATCH = 10;
 /** Writes sequences in parallel batches so large searches stay inside one call's time limit. */
 export async function writeDrafts(context: OnboardingContext, leads: Lead[]) {
   const batches = Array.from({ length: Math.ceil(leads.length / BATCH) }, (_, index) => index * BATCH);
-  const results = await Promise.all(batches.map((start) => writeBatch(context, leads.slice(start, start + BATCH))));
+  const results = await Promise.all(batches.map((start) => writeLeadDrafts(context, leads.slice(start, start + BATCH))));
   const sequences: Record<number, DraftEmail[]> = {};
   const usage: TokenUsage = { modelCalls: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   results.forEach((batch, index) => {
@@ -39,12 +39,15 @@ export async function writeDrafts(context: OnboardingContext, leads: Lead[]) {
   return { sequences, usage };
 }
 
-async function writeBatch(context: OnboardingContext, leads: Lead[]) {
+export type DraftSender = Pick<OnboardingContext, "senderName" | "website" | "business">;
+
+/** Writes the sequence for a small batch of leads. Keys of `sequences` are indexes into `leads`. */
+export async function writeLeadDrafts(context: DraftSender, leads: Lead[], { timeoutMs = 180_000 } = {}) {
   const generated = await generateText({
     model,
     output: Output.object({ schema: draftsOutputSchema }),
     maxRetries: 1,
-    timeout: 180_000,
+    timeout: timeoutMs,
     system: rules,
     prompt: JSON.stringify({
       sender: {

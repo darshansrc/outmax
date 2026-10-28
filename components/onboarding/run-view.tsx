@@ -5,12 +5,17 @@ import { useParams } from "next/navigation";
 import { ArrowUpRight, Check, ChevronDown, ChevronUp, Copy, Globe, Mail, X } from "lucide-react";
 import { cn } from "cn";
 import { Button, Input, Textarea } from "@/components/brand/controls";
-import { ENGINE_LABELS, type DraftEmail, type Lead, type OnboardingRun, type RunUsage, type TokenUsage } from "@/lib/onboarding";
+import { ENGINE_LABELS, LEAD_COUNT, MAX_SEARCH_LEADS, type DraftEmail, type Lead, type OnboardingRun, type RunUsage, type TokenUsage } from "@/lib/onboarding";
 import { Favicon, Flag, LinkedInLogo } from "./icons";
-import { RecentSearches, idealCustomer } from "./setup";
+import { LeadCount, RecentSearches, idealCustomer } from "./setup";
 import { PanelLabel, Pill, Shell, Spinner, formatDate, hostname } from "./shell";
 
 const active = (status: string) => status === "queued" || status === "running";
+const draftsPending = (drafts: OnboardingRun["drafts"]) =>
+  drafts?.status === "pending" || (drafts?.status === "ready" && !!drafts.pending?.length);
+const draftState = (drafts: OnboardingRun["drafts"], index: number) =>
+  drafts?.status === "ready" && drafts.pending?.includes(index) ? "writing"
+    : drafts?.status === "ready" && drafts.failed?.includes(index) ? "failed" : null;
 const columns = [
   "md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_88px_84px]",
   "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)_minmax(0,0.8fr)_88px_84px]",
@@ -33,7 +38,7 @@ function useRun(runId: string) {
         if (!response.ok) throw new Error(body.error ?? "We couldn’t load this search.");
         setRun(body);
         setError(null);
-        if (active(body.status) || body.drafts?.status === "pending") {
+        if (active(body.status) || draftsPending(body.drafts)) {
           timer = setTimeout(() => void load(), active(body.status) ? 5_000 : 3_000);
         }
       } catch (failure) {
@@ -47,9 +52,18 @@ function useRun(runId: string) {
     };
   }, [runId, request]);
 
+  const reload = () => setRequest(({ count }) => ({ count: count + 1, retryDrafts: false }));
   return {
-    run, error,
-    reload: () => setRequest(({ count }) => ({ count: count + 1, retryDrafts: false })),
+    run, error, reload,
+    findMore: async (count: number) => {
+      const response = await fetch(`/api/onboarding/runs/${encodeURIComponent(runId)}/more`, {
+        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error ?? "We couldn’t find more leads.");
+      setRun(body);
+      reload();
+    },
     retryDrafts: () => setRequest(({ count }) => ({ count: count + 1, retryDrafts: true })),
   };
 }
@@ -60,7 +74,7 @@ export function RunPage() {
 }
 
 function RunView({ runId }: { runId: string }) {
-  const { run, error, reload, retryDrafts } = useRun(runId);
+  const { run, error, reload, retryDrafts, findMore } = useRun(runId);
   const [open, setOpen] = useState<number | null>(null);
   const [now, setNow] = useState<number | null>(null);
   const count = run?.leads.length ?? 0;
@@ -152,7 +166,12 @@ function RunView({ runId }: { runId: string }) {
                   : "Searching for companies that match your ideal customer. Usually 5–10 minutes."
                 : <><span className="font-medium text-zinc-950">{leads.length}</span> companies · <span className="font-medium text-zinc-950">{withEmail}</span> with email · <span className="font-medium text-zinc-950">{verified}</span> verified</>}
             </p>
-            {leads.length > 0 && <Button variant="secondary" size="sm" className="h-8 px-3 text-[13px]" onClick={() => exportCsv(run)}>Export CSV</Button>}
+            <div className="flex items-center gap-2">
+              {run.engine === "outmax" && run.status === "completed" && leads.length <= MAX_SEARCH_LEADS - LEAD_COUNT.min && (
+                <FindMore room={MAX_SEARCH_LEADS - leads.length} onFind={findMore} />
+              )}
+              {leads.length > 0 && <Button variant="secondary" size="sm" className="h-8 px-3 text-[13px]" onClick={() => exportCsv(run)}>Export CSV</Button>}
+            </div>
           </div>
 
           <div className={`sticky top-14 z-10 hidden h-9 items-center gap-4 border-b border-zinc-200 bg-white px-5 text-[11px] font-medium text-zinc-500 md:grid lg:top-0 ${columns}`}>
@@ -201,7 +220,7 @@ function RunView({ runId }: { runId: string }) {
                   onClick={(event) => { event.stopPropagation(); setOpen(index); }}
                   className="h-7 gap-1.5 justify-self-end px-2.5 text-[12px]"
                 >
-                  <Mail className="size-3.5" />Emails
+                  {draftState(run.drafts, index) === "writing" ? <Spinner /> : <Mail className="size-3.5" />}Emails
                 </Button>
               </li>
             ))}
@@ -223,7 +242,7 @@ function RunView({ runId }: { runId: string }) {
       {openLead && open !== null && (
         <LeadPanel
           key={open} lead={openLead} index={open} total={leads.length} drafts={run.drafts}
-          onClose={() => setOpen(null)} onMove={setOpen} onRetryDrafts={retryDrafts}
+          searching={active(run.status)} onClose={() => setOpen(null)} onMove={setOpen} onRetryDrafts={retryDrafts}
         />
       )}
     </Shell>
@@ -271,7 +290,7 @@ function Usage({ usage, live }: { usage: RunUsage; live: boolean }) {
   const drafts = tokens(usage.draftTokens);
   const rows = ([
     usage.totalDollars !== null && { key: "Total", value: `${dollars(usage.totalDollars)} est.`, strong: true },
-    (usage.exaSearches > 0 || usage.exaSearchDollars > 0) && { key: "Exa search", value: joined(usage.exaSearches && plural(usage.exaSearches, "request"), dollars(usage.exaSearchDollars)) },
+    (usage.exaSearches > 0 || usage.exaSearchDollars > 0) && { key: "Web search", value: joined(usage.exaSearches && plural(usage.exaSearches, "request"), usage.exaSearchDollars > 0 && dollars(usage.exaSearchDollars)) },
     (usage.exaAgentRuns > 0 || usage.exaAgentDollars > 0) && { key: "Exa agent", value: joined(usage.exaAgentRuns && plural(usage.exaAgentRuns, "run"), dollars(usage.exaAgentDollars)) },
     (usage.fiberLookups > 0 || usage.fiberCredits > 0) && { key: "Fiber", value: joined(usage.fiberLookups && plural(usage.fiberLookups, "lookup"), `${Math.round(usage.fiberCredits * 100) / 100} credits`) },
     search && { key: "AI · search", value: search.text, title: search.title },
@@ -303,7 +322,15 @@ function RunPanel({ run, runId }: { run: OnboardingRun; runId: string }) {
     ["Buyer", profile.buyerTitles[0] ?? "Best fit"],
     ["Signal", profile.buyingSignals[0] ?? null],
   ].filter((row): row is [string, string] => !!row[1]);
-  const drafts = run.drafts?.status;
+  const drafts = run.drafts;
+  const writing = drafts?.status === "ready" ? drafts.pending?.length ?? 0 : 0;
+  const failed = drafts?.status === "ready" ? drafts.failed?.length ?? 0 : 0;
+  const draftLabel = !drafts ? (run.status === "completed" ? "Writing…" : "After search")
+    : drafts.status === "pending" ? "Writing…"
+      : drafts.status === "failed" ? "Failed"
+        : writing ? `Writing ${writing}…`
+          : failed ? `${failed} failed`
+            : Object.keys(drafts.sequences).length ? "Ready" : active(run.status) ? "As leads arrive" : "None";
   return (
     <div>
       <PanelLabel>Ideal customer</PanelLabel>
@@ -321,12 +348,39 @@ function RunPanel({ run, runId }: { run: OnboardingRun; runId: string }) {
         <div className="flex justify-between gap-3"><dt className="text-zinc-500">Started</dt><dd className="font-medium text-zinc-800">{run.createdAt ? formatDate(run.createdAt) : "—"}</dd></div>
         <div className="flex justify-between gap-3">
           <dt className="text-zinc-500">Email drafts</dt>
-          <dd className="font-medium text-zinc-800">{drafts === "ready" ? "Ready" : drafts === "failed" ? "Failed" : run.status === "completed" ? "Writing…" : "After search"}</dd>
+          <dd className="font-medium text-zinc-800">{draftLabel}</dd>
         </div>
         <div className="flex justify-between gap-3"><dt className="text-zinc-500">Engine</dt><dd className="font-medium text-zinc-800">{ENGINE_LABELS[run.engine]}</dd></div>
       </dl>
       {run.usage && <Usage usage={run.usage} live={active(run.status)} />}
       <div className="mt-6 border-t border-zinc-100 pt-4"><RecentSearches activeRunId={runId} /></div>
+    </div>
+  );
+}
+
+function FindMore({ room, onFind }: { room: number; onFind: (count: number) => Promise<void> }) {
+  const [count, setCount] = useState(Math.min(LEAD_COUNT.default, room));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function find() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onFind(count);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "We couldn’t find more leads.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {error && <p role="alert" className="max-w-56 truncate text-[12px] text-red-600" title={error}>{error}</p>}
+      <LeadCount id="find-more-count" aria-label="How many more leads" value={count} onChange={setCount} max={room} prefix="+" />
+      <Button size="sm" className="h-8 px-3 text-[13px]" disabled={busy} onClick={find}>
+        {busy ? <><Spinner />Starting…</> : "Find more"}
+      </Button>
     </div>
   );
 }
@@ -350,8 +404,8 @@ function EmailState({ lead }: { lead: Lead }) {
   return <span className="text-[12px] text-zinc-500">{lead.emailVerificationStatus === "catch_all" ? "Catch-all" : "Unverified"}</span>;
 }
 
-function LeadPanel({ lead, index, total, drafts, onClose, onMove, onRetryDrafts }: {
-  lead: Lead; index: number; total: number; drafts: OnboardingRun["drafts"];
+function LeadPanel({ lead, index, total, drafts, searching, onClose, onMove, onRetryDrafts }: {
+  lead: Lead; index: number; total: number; drafts: OnboardingRun["drafts"]; searching: boolean;
   onClose: () => void; onMove: (index: number) => void; onRetryDrafts: () => void;
 }) {
   const close = useRef<HTMLButtonElement>(null);
@@ -433,7 +487,7 @@ function LeadPanel({ lead, index, total, drafts, onClose, onMove, onRetryDrafts 
             )}
           </PanelSection>
 
-          <Drafts lead={lead} index={index} drafts={drafts} total={total} onRetry={onRetryDrafts} />
+          <Drafts lead={lead} index={index} drafts={drafts} total={total} searching={searching} onRetry={onRetryDrafts} />
         </div>
       </aside>
     </>
@@ -451,8 +505,8 @@ function PanelSection({ label, children }: { label: string; children: ReactNode 
 
 const dayLabels: Record<number, string> = { 1: "Day 1 · First email", 3: "Day 3 · Follow-up", 7: "Day 7 · Last note" };
 
-function Drafts({ lead, index, drafts, total, onRetry }: {
-  lead: Lead; index: number; drafts: OnboardingRun["drafts"]; total: number; onRetry: () => void;
+function Drafts({ lead, index, drafts, total, searching, onRetry }: {
+  lead: Lead; index: number; drafts: OnboardingRun["drafts"]; total: number; searching: boolean; onRetry: () => void;
 }) {
   const [day, setDay] = useState(0);
   const [edits, setEdits] = useState<Record<number, DraftEmail>>({});
@@ -470,6 +524,23 @@ function Drafts({ lead, index, drafts, total, onRetry }: {
       <PanelSection label="Emails">
         <p role="alert" className="text-[13px] text-zinc-600">{drafts.error}</p>
         <Button size="sm" variant="secondary" className="mt-3 h-8 px-3 text-[13px]" onClick={onRetry}>Try again</Button>
+      </PanelSection>
+    );
+  }
+
+  const state = draftState(drafts, index);
+  if (state === "writing") {
+    return (
+      <PanelSection label="Emails">
+        <p className="flex items-center gap-2 text-[13px] text-zinc-500"><Spinner />Writing emails for this lead. Usually under a minute.</p>
+      </PanelSection>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <PanelSection label="Emails">
+        <p role="alert" className="text-[13px] text-zinc-600">We couldn’t write the emails for this lead.{searching && " You can try again when the search finishes."}</p>
+        {!searching && <Button size="sm" variant="secondary" className="mt-3 h-8 px-3 text-[13px]" onClick={onRetry}>Try again</Button>}
       </PanelSection>
     );
   }

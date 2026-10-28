@@ -128,6 +128,7 @@ Copying drafts and exporting a CSV still work for users who prefer to send thems
 
 - **R-DRAFT-1 (P0):** Write three emails per lead (Day 1, Day 3 as a reply on the same thread, Day 7 with a new angle), using that company's fit reason.
 - **R-DRAFT-2 (P0):** Write in plain, human language: no filler, no restating the reader's job, under 80 words for Day 1.
+- **R-DRAFT-4 (P0):** Write each lead's drafts as soon as its contact lookup finishes, not after the whole search. Failed drafts can be retried per search. (Done for the Outmax engine: batches of up to 5, 3 at a time.)
 - **R-DRAFT-3 (P1):** Let the user regenerate one lead's drafts, or all drafts, with a short instruction (for example "more casual").
 
 ### 7.6 Search experience (`components/onboarding/run-view.tsx`)
@@ -137,7 +138,7 @@ Copying drafts and exporting a CSV still work for users who prefer to send thems
 - **R-RUN-3 (P0):** When a search finishes short of the target, explain why in plain words and suggest the profile field to change.
   - Accept: if most rejections cite the same must-have, the message names it.
 - **R-RUN-4 (P0):** CSV export with company, website, fit reason, contact, title, email, email status and LinkedIn.
-- **R-RUN-5 (P1):** "Find 10 more" continues the same search without repeating companies.
+- **R-RUN-5 (P1):** "Find more" lets the user pick 5–50 more leads and continues the same search without repeating companies, up to 100 leads per search. Each request gets its own check and planning budget. (Done for the Outmax engine.)
 
 ### 7.7 Cost and observability
 
@@ -266,7 +267,7 @@ Paid searches cost money. Agents must ask before running a search on this set.
 
 ## 13. Current state (as of 2026-10-28)
 
-Built: website analysis, profile review, lead count picker, the parallel Outmax agent engine (Exa search, Fiber emails, capped Exa agent fallback), the Exa agent engine option, live progress, rejection list, email drafts, CSV export, the usage panel and agent logs.
+Built: website analysis, profile review, lead count picker, the parallel Outmax agent engine (Firecrawl web search, Fiber emails, capped Exa agent fallback), the Exa agent engine option, live progress, rejection list, email drafts, CSV export, the usage panel, agent logs, per-lead drafts written while the search runs, and "find more" on finished searches.
 
 Known gaps:
 

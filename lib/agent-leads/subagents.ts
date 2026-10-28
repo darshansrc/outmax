@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sizeLabel, type Business, type Profile } from "../onboarding";
+import type { SearchRow } from "../web-search";
 import { domainOf, emptyUsage, excerpts, extract, grounded, normalizeUrl, research, textSeen, type SearchUsage } from "./search";
 
 const text = z.string().trim().min(1);
@@ -93,11 +94,14 @@ export async function scout(brief: Brief, angle: { label: string; query: string 
     label: `scout "${angle.label}"`,
     signal,
     maxSteps: 4,
+    numResults: 10,
+    excludeDomains: skipDomains(brief, skip),
     instructions: [
       "You find companies that are likely to buy from the seller. You are working one search angle only.",
       "Find real operating companies that match the ideal customer description, including its stage and size. Prefer each company's own website as the source of truth.",
       "Skip household names and companies far larger or more established than the ideal customer, unless the description asks for them. Skip anything in notAFit.",
       "Skip the seller, its competitors, vendors that sell similar products, agencies, publishers, directories and anything in the skip list.",
+      `For launches, funding, hiring or other recent signals, set start_published_date to ${yearAgo()}.`,
       "List up to 12 candidates with their official website and the exact sentence that suggests they fit.",
     ],
     prompt: { ...buyerBrief(brief), angle, skip: skip.slice(0, 200) },
@@ -156,7 +160,7 @@ export type Verdict =
   | { pass: true; companyName: string; location: string | null; fitExplanation: string; score: number; sourceUrls: string[] }
   | { pass: false; companyName: string; reason: string };
 
-export async function verify(brief: Brief, candidate: Candidate, signal?: AbortSignal): Promise<{ verdict: Verdict; usage: SearchUsage }> {
+export async function verify(brief: Brief, candidate: Candidate, signal?: AbortSignal, pages?: SearchRow[]): Promise<{ verdict: Verdict; usage: SearchUsage }> {
   const criteria = requiredCriteria(brief.profile);
   const found = await research({
     label: `verify ${candidate.domain}`,
@@ -164,9 +168,12 @@ export async function verify(brief: Brief, candidate: Candidate, signal?: AbortS
     maxSteps: 4,
     numResults: 6,
     domain: candidate.domain,
+    pages,
     instructions: [
       "You verify one prospective customer for the seller. Be skeptical.",
-      "First use site_search for what the company does, its size and location. Then use company_search for its LinkedIn company page and headcount, and web_search for news or job posts that show buying signals.",
+      "companyPages, when given, are the company's own homepage and subpages. Start from them, and use site_search only for facts they don't cover.",
+      "Use company_search for its LinkedIn company page and headcount, and web_search for news or job posts that show buying signals.",
+      `For recent news or job posts, set start_published_date to ${yearAgo()}.`,
       "Check every required criterion. Judge whether it matches the ideal customer description in stage and size, and whether it would realistically adopt the seller's product now. Note anything in notAFit or leave-out that applies.",
     ],
     prompt: { ...buyerBrief(brief), requiredCriteria: criteria, candidate },
@@ -242,7 +249,7 @@ export type WebContact = {
   sourceUrls: string[];
 };
 
-export async function findContact(brief: Brief, company: { companyName: string; website: string; domain: string }, signal?: AbortSignal) {
+export async function findContact(brief: Brief, company: { companyName: string; website: string; domain: string }, signal?: AbortSignal, pages?: SearchRow[]) {
   const titles = brief.profile.buyerTitles;
   const found = await research({
     label: `contact ${company.domain}`,
@@ -250,10 +257,11 @@ export async function findContact(brief: Brief, company: { companyName: string; 
     maxSteps: 5,
     numResults: 6,
     domain: company.domain,
+    pages,
     instructions: [
       "You find the one current person at a company who would sign off on buying the seller's product.",
       `Preferred titles: ${titles.join("; ") || "founder, CEO or head of the relevant team"}. At a small company the founder is fine.`,
-      "Use site_search for the company's team, about and leadership pages, people_search for LinkedIn profiles of people at the company, and web_search for press.",
+      "companyPages, when given, may already include the team or about page. Use site_search for leadership pages they don't cover, people_search for LinkedIn profiles of people at the company, and web_search for press.",
       "Also look for that person's work email published anywhere on the web. Do not guess email patterns.",
     ],
     prompt: { company, sellerSells: brief.business.oneLiner, titles },
@@ -290,3 +298,14 @@ export async function findContact(brief: Brief, company: { companyName: string; 
   }
   return { contact, usage: found.usage };
 }
+
+const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+/** The seller and skipped companies as Exa domain filters. Names that aren't domains stay in the prompt. */
+function skipDomains(brief: Brief, skip: string[]) {
+  const seller = domainOf(brief.website);
+  const skipped = [...new Set(skip.map((item) => item.trim().toLowerCase()).filter((item) => DOMAIN.test(item) && item !== seller))];
+  return [...(seller ? [seller] : []), ...skipped.slice(-99)];
+}
+
+const yearAgo = () => new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
