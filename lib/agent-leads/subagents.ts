@@ -90,6 +90,7 @@ export type Candidate = { companyName: string; website: string; domain: string; 
 
 export async function scout(brief: Brief, angle: { label: string; query: string }, skip: string[], signal?: AbortSignal) {
   const found = await research({
+    label: `scout "${angle.label}"`,
     signal,
     maxSteps: 4,
     instructions: [
@@ -158,6 +159,7 @@ export type Verdict =
 export async function verify(brief: Brief, candidate: Candidate, signal?: AbortSignal): Promise<{ verdict: Verdict; usage: SearchUsage }> {
   const criteria = requiredCriteria(brief.profile);
   const found = await research({
+    label: `verify ${candidate.domain}`,
     signal,
     maxSteps: 4,
     numResults: 6,
@@ -243,6 +245,7 @@ export type WebContact = {
 export async function findContact(brief: Brief, company: { companyName: string; website: string; domain: string }, signal?: AbortSignal) {
   const titles = brief.profile.buyerTitles;
   const found = await research({
+    label: `contact ${company.domain}`,
     signal,
     maxSteps: 5,
     numResults: 6,

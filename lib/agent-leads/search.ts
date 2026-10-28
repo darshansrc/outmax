@@ -2,6 +2,7 @@ import { generateText, isStepCount, Output, pruneMessages, type LanguageModelUsa
 import type { z } from "zod";
 import { model } from "../provider";
 import { createSearchTools, SEARCH_TOOL_NAMES, type SearchRow } from "../web-search";
+import { agentLog, short } from "./log";
 
 /** Characters, not tokens. Roughly 4 characters per token keeps every call far below the model limit. */
 const MAX_PROMPT_CHARACTERS = 240_000;
@@ -75,11 +76,14 @@ function sizeOf(messages: ModelMessage[]) {
  * One research pass: the model searches with Exa until it has enough, then writes a short brief.
  * Raw results never leave this function except as bounded excerpts.
  */
-export async function research({ instructions, prompt, maxSteps, numResults = 8, domain, signal }: {
+export async function research({ label, instructions, prompt, maxSteps, numResults = 8, domain, signal }: {
+  /** Names this pass in the logs, such as "scout" or "verify acme.com". */
+  label: string;
   instructions: string[]; prompt: unknown; maxSteps: number; numResults?: number; domain?: string; signal?: AbortSignal;
 }) {
   const sources: Sources = new Map();
   const usage = emptyUsage();
+  const startedAt = Date.now();
 
   const result = await generateText({
     model,
@@ -105,6 +109,12 @@ export async function research({ instructions, prompt, maxSteps, numResults = 8,
         const output = item.output;
         usage.searches++;
         usage.exaDollars += output.costDollars?.total ?? 0;
+        agentLog(`${label} · ${item.toolName}`, {
+          query: short((item.input as { query?: string }).query, 200),
+          results: output.results.length,
+          top: output.results.slice(0, 4).map((row) => domainOf(row.url)),
+          dollars: output.costDollars?.total,
+        });
         const collect = (rows: SearchRow[]) => {
           for (const row of rows) {
             const excerpt = [row.title, row.text, ...(row.highlights ?? [])].filter(Boolean).join("\n");
@@ -119,6 +129,13 @@ export async function research({ instructions, prompt, maxSteps, numResults = 8,
   });
 
   addTokens(usage, result.totalUsage);
+  agentLog(`${label} · research done`, {
+    seconds: Math.round((Date.now() - startedAt) / 100) / 10,
+    steps: result.steps.length,
+    searches: usage.searches,
+    sources: sources.size,
+    tokens: { in: usage.inputTokens, out: usage.outputTokens },
+  });
   return { brief: result.text.slice(0, 16_000), sources, usage };
 }
 

@@ -2,6 +2,7 @@ import type { Lead } from "../leads";
 import type { OnboardingContext } from "../onboarding-store";
 import { OnboardingStore } from "../onboarding-store";
 import { costOf, emailFromName, fiberConfigured, readAgentLookup, revealFromLinkedIn, startAgentLookup, type FiberEmail } from "./fiber";
+import { agentLog, short, withRunLog } from "./log";
 import { domainOf, type SearchUsage } from "./search";
 import { findContact, planAngles, scout, verify, type Brief, type Candidate, type WebContact } from "./subagents";
 
@@ -194,8 +195,10 @@ class Round {
     await this.save();
     try {
       const recent = state.rejected.slice(-15).map((item) => `${item.companyName}: ${item.reason}`).join("\n") || null;
+      agentLog(`plan #${state.plans + 1} · planning search angles`, { rejectedSoFar: state.rejected.length });
       const { angles, usage } = await planAngles(this.brief, { used: state.angles.map((angle) => angle.query), rejectionSummary: recent, signal: AbortSignal.timeout(CALL_MS) });
       this.addUsage(usage);
+      agentLog(`plan #${state.plans + 1} · ${angles.length} angles`, { angles: angles.map((angle) => angle.label) });
       state.angles.push(...angles.map((angle) => ({ ...angle, done: false })));
     } finally {
       state.plans++;
@@ -209,18 +212,23 @@ class Round {
     this.scouting++;
     await this.save();
     try {
+      agentLog(`scout "${angle.label}" · start`, { query: short(angle.query, 200) });
       const { candidates, usage } = await scout(this.brief, angle, this.skip, AbortSignal.timeout(CALL_MS));
       this.addUsage(usage);
       const seen = new Set(this.state.seen);
       const names = new Set(this.skip.map(nameKey));
+      const added: string[] = [];
       for (const candidate of candidates) {
         if (seen.has(candidate.domain) || names.has(nameKey(candidate.companyName))) continue;
         seen.add(candidate.domain);
         names.add(nameKey(candidate.companyName));
         this.state.seen.push(candidate.domain);
         this.state.queue.push(candidate);
+        added.push(candidate.domain);
       }
+      agentLog(`scout "${angle.label}" · ${added.length} new of ${candidates.length} candidates`, { added, queue: this.state.queue.length });
     } catch (error) {
+      agentLog(`scout "${angle.label}" · failed`, { error: error instanceof Error ? short(error.message, 200) : "Unknown error" });
       console.error(JSON.stringify({ route: "agent-leads/scout", runId: this.runId, errorType: error instanceof Error ? error.name : "UnknownError" }));
     } finally {
       this.scouting--;
@@ -265,6 +273,7 @@ class Round {
     const { state } = this;
     this.verifying++;
     await this.save();
+    agentLog(`check ${candidate.domain} · start`, { company: candidate.companyName, why: short(candidate.reason, 160) });
     const [verdict, web] = await Promise.allSettled([
       verify(this.brief, candidate, AbortSignal.timeout(CALL_MS)),
       findContact(this.brief, candidate, AbortSignal.timeout(CALL_MS)),
@@ -272,14 +281,27 @@ class Round {
     this.verifying--;
     state.checked++;
     if (web.status === "fulfilled") this.addUsage(web.value.usage);
+    if (web.status === "fulfilled") {
+      const { contact } = web.value;
+      agentLog(`contact ${candidate.domain} · ${contact.contactName ? "found" : "none"}`, contact.contactName
+        ? { name: contact.contactName, title: contact.jobTitle, linkedIn: contact.linkedInUrl, email: contact.workEmail }
+        : undefined);
+    } else {
+      agentLog(`contact ${candidate.domain} · failed`, { error: web.reason instanceof Error ? short(web.reason.message, 200) : "Unknown error" });
+    }
     if (verdict.status === "rejected") {
+      agentLog(`check ${candidate.domain} · error`, { error: verdict.reason instanceof Error ? short(verdict.reason.message, 200) : "Unknown error" });
       state.rejected.push({ companyName: candidate.companyName, website: candidate.website, reason: "We couldn’t check this company." });
     } else {
       this.addUsage(verdict.value.usage);
       const result = verdict.value.verdict;
       if (!result.pass) {
+        agentLog(`check ${candidate.domain} · rejected`, { reason: short(result.reason, 240) });
         state.rejected.push({ companyName: result.companyName, website: candidate.website, reason: result.reason });
-      } else if (this.needed > 0) {
+      } else if (this.needed <= 0) {
+        agentLog(`check ${candidate.domain} · passed, but target already reached`, { score: result.score });
+      } else {
+        agentLog(`check ${candidate.domain} · passed`, { score: result.score, accepted: state.accepted.length + 1, target: this.target });
         const prospect: Prospect = {
           domain: candidate.domain,
           companyName: result.companyName,
@@ -322,7 +344,11 @@ class Round {
           const { contact, usage } = await findContact(this.brief, prospect, AbortSignal.timeout(CALL_MS));
           this.addUsage(usage);
           this.applyWeb(prospect, contact);
-        } catch {
+          agentLog(`contact ${prospect.domain} · ${contact.contactName ? "found" : "none"}`, contact.contactName
+            ? { name: contact.contactName, title: contact.jobTitle, linkedIn: contact.linkedInUrl, email: contact.workEmail }
+            : undefined);
+        } catch (error) {
+          agentLog(`contact ${prospect.domain} · failed`, { error: error instanceof Error ? short(error.message, 200) : "Unknown error" });
           prospect.webChecked = true;
         }
       }
@@ -333,6 +359,7 @@ class Round {
           : null;
       if (!prospect.workEmail && lookup && fiberConfigured()) {
         try {
+          agentLog(`fiber ${prospect.domain} · ${prospect.linkedInUrl ? "LinkedIn reveal" : "lookup by name"}`, { linkedIn: prospect.linkedInUrl, name: prospect.contactName });
           const result = await lookup();
           state.costs.fiberLookups++;
           state.costs.fiberCredits += result.credits;
@@ -343,7 +370,11 @@ class Round {
             prospect.emailStatus = best.status;
             prospect.contactSources.push("fiber");
           }
+          agentLog(`fiber ${prospect.domain} · ${best ? "email found" : "no email"}`, {
+            email: best?.email, status: best?.status, returned: result.emails.length, credits: result.credits,
+          });
         } catch (error) {
+          agentLog(`fiber ${prospect.domain} · failed`, { error: error instanceof Error ? short(error.message, 200) : "Unknown error" });
           console.error(JSON.stringify({ route: "agent-leads/fiber", runId: this.runId, message: error instanceof Error ? error.message.slice(0, 200) : null }));
         }
       }
@@ -356,12 +387,14 @@ class Round {
           state.costs.agentRuns++;
           prospect.agentRunId = run.id;
           prospect.contact = "agent";
+          agentLog(`exa agent ${prospect.domain} · started`, { exaRunId: run.id, used: state.costs.agentRuns, max: MAX_AGENT_LOOKUPS });
           return;
-        } catch {
-          // Leave the lead without a contact.
+        } catch (error) {
+          agentLog(`exa agent ${prospect.domain} · failed to start`, { error: error instanceof Error ? short(error.message, 200) : "Unknown error" });
         }
       }
       prospect.contact = "done";
+      agentLog(`lead ${prospect.domain} · ready`, { name: prospect.contactName, email: prospect.workEmail, emailStatus: prospect.emailStatus, sources: prospect.contactSources });
     } finally {
       this.contacting--;
       await this.save();
@@ -375,6 +408,9 @@ class Round {
       if (!done) return;
       this.state.costs.agentDollars += costOf(run);
       prospect.contact = "done";
+      agentLog(`exa agent ${prospect.domain} · ${contact?.contactName || contact?.workEmail ? "found" : "nothing"}`, {
+        name: contact?.contactName, email: contact?.workEmail, dollars: costOf(run),
+      });
       if (!contact) return;
       prospect.contactName = contact.contactName;
       prospect.jobTitle = contact.jobTitle;
@@ -412,6 +448,7 @@ class Round {
 
   async run() {
     const { state } = this;
+    agentLog("round · start", { target: this.target, accepted: state.accepted.length, checked: state.checked, queue: state.queue.length, angles: state.angles.length });
     await this.pollAgents();
     if (!state.angles.length && state.plans < maxPlans(this.target)) await this.plan();
     await Promise.all([this.feed(), ...Array.from({ length: WORKERS }, () => this.worker())]);
@@ -431,6 +468,12 @@ class Round {
         state.shortfallReason = `Found ${state.accepted.length} of ${this.target} after checking ${state.checked} companies; ${state.rejected.length} didn’t pass.`;
       }
     }
+    agentLog(`round · ${state.status === "completed" ? "search complete" : "end, continuing next round"}`, {
+      accepted: state.accepted.length, target: this.target, checked: state.checked, rejected: state.rejected.length,
+      exaSearches: state.costs.searches, exaDollars: Math.round(state.costs.searchDollars * 1000) / 1000,
+      fiberCredits: state.costs.fiberCredits, tokens: { in: state.costs.inputTokens, out: state.costs.outputTokens },
+      ...(state.shortfallReason ? { shortfall: state.shortfallReason } : {}),
+    });
     await this.save();
   }
 }
@@ -444,7 +487,7 @@ export async function advanceAgentRun(runId: string, context: OnboardingContext)
     if (!state || state.status !== "running") return;
     const round = new Round(store, runId, { website: context.website, business: context.business, profile: context.profile }, state);
     try {
-      await round.run();
+      await withRunLog(runId, () => round.run());
       state.failures = 0;
     } catch (error) {
       console.error(JSON.stringify({ route: "agent-leads/round", runId, errorType: error instanceof Error ? error.name : "UnknownError", message: error instanceof Error ? error.message.slice(0, 300) : null }));
