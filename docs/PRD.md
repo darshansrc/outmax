@@ -267,7 +267,7 @@ Paid searches cost money. Agents must ask before running a search on this set.
 
 ## 13. Current state (as of 2026-10-28)
 
-Built: website analysis, profile review, lead count picker, the parallel Outmax agent engine (Firecrawl web search, Fiber emails, capped Exa agent fallback), the Exa agent engine option, live progress, rejection list, email drafts, CSV export, the usage panel, agent logs, per-lead drafts written while the search runs, and "find more" on finished searches.
+Built: website analysis, profile review, lead count picker, the parallel Outmax agent engine (Gemini 4 Argon with Google Search, Fiber emails, capped Exa agent fallback), the Exa agent engine option, live progress, rejection list, email drafts, CSV export, the usage panel, agent logs, per-lead drafts written while the search runs, and "find more" on finished searches.
 
 Known gaps:
 
